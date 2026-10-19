@@ -1,0 +1,1852 @@
+<!DOCTYPE html>
+<html lang="he" dir="rtl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <title>GeoPulse Live — מערכת איכון וניטור מכשירים בזמן אמת</title>
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com/3.4.17"></script>
+
+  <!-- Leaflet Maps CSS & JS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <script src="https://unpkg.com/mqtt@5.3.4/dist/mqtt.min.js"></script>
+  <!-- Google Fonts: Heebo & Inter -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+  <style>
+    * {
+      box-sizing: border-box;
+      font-family: 'Heebo', 'Inter', sans-serif;
+    }
+    body {
+      margin: 0;
+      background-color: #0b1120;
+      color: #f1f5f9;
+      overflow-x: hidden;
+    }
+    .font-mono-num {
+      font-family: 'Inter', monospace;
+      direction: ltr;
+      unicode-bidi: embed;
+    }
+    #mapContainer {
+      width: 100%;
+      height: 100%;
+      min-height: 440px;
+      z-index: 10;
+      background: #0f172a;
+    }
+    .leaflet-container {
+      font-family: 'Heebo', 'Inter', sans-serif !important;
+      background: #0f172a !important;
+    }
+    .leaflet-popup-content-wrapper {
+      background: #1e293b !important;
+      color: #f8fafc !important;
+      border: 1px solid #334155;
+      border-radius: 12px !important;
+      box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.6) !important;
+    }
+    .leaflet-popup-tip {
+      background: #1e293b !important;
+    }
+    .leaflet-popup-content {
+      margin: 12px 14px !important;
+      direction: rtl;
+      text-align: right;
+    }
+    @keyframes pulseRing {
+      0% { transform: scale(0.85); opacity: 0.9; }
+      70% { transform: scale(2.2); opacity: 0; }
+      100% { transform: scale(2.2); opacity: 0; }
+    }
+    .marker-pulse {
+      animation: pulseRing 2s infinite cubic-bezier(0.25, 0.8, 0.25, 1);
+    }
+    /* Custom Scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+  </style>
+</head>
+<body class="min-h-screen flex flex-col bg-slate-950 text-slate-100 select-none md:select-auto">
+
+  <!-- OLED Smart Blackout Overlay (Keeps Wake Lock & Safari/Android Foreground Priority Alive with 0% Glare) -->
+  <div id="oledOverlay" class="fixed inset-0 z-50 bg-black hidden flex-col items-center justify-between p-8 text-center cursor-pointer">
+    <div class="text-xs text-slate-600 mt-4">מצב חיסכון סוללה פעיל • איכון ברקע בעדיפות גבוהה</div>
+    <div class="flex flex-col items-center gap-3">
+      <div class="w-4 h-4 rounded-full bg-emerald-500/40 animate-ping"></div>
+      <div class="text-slate-500 text-sm font-medium">משדר מיקום רציף למוקד</div>
+      <div id="oledCoords" class="text-slate-600 text-xs font-mono-num">32.0312, 34.8891</div>
+      <div id="oledLastPing" class="text-slate-700 text-xs">עדכון אחרון: כעת</div>
+    </div>
+    <div class="mb-6 px-5 py-2.5 rounded-full border border-slate-800 text-slate-500 text-xs">
+      הקש פעמיים בכל מקום על המסך ליציאה ממצב החשכה
+    </div>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toastContainer" class="fixed bottom-5 left-5 z-50 flex flex-col gap-2 pointer-events-none"></div>
+
+  <!-- Share Link & QR Modal -->
+  <div id="shareModal" class="fixed inset-0 z-40 bg-slate-950/80 backdrop-blur-sm hidden items-center justify-center p-4">
+    <div class="bg-slate-900 border border-slate-700/80 rounded-2xl max-w-lg w-full p-6 shadow-2xl">
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4 mb-4">
+        <div class="flex items-center gap-2.5">
+          <div class="w-9 h-9 rounded-xl bg-indigo-500/20 border border-indigo-500/40 flex items-center justify-center text-indigo-400">
+            <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>
+          </div>
+          <div>
+            <h3 class="text-lg font-bold text-white">קישור הצטרפות למשתמש קצה</h3>
+            <p class="text-xs text-slate-400">מותאם לדפדפן Safari (iOS) ולדפדפן Chrome (Android)</p>
+          </div>
+        </div>
+        <button id="closeShareModalBtn" class="text-slate-400 hover:text-white p-1.5 rounded-lg hover:bg-slate-800 transition">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="space-y-4">
+        <div class="bg-slate-950/90 border border-emerald-500/40 rounded-xl p-3.5 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-bold text-emerald-400">1. קישור ל-Agent עבור המשתמשים (לשליחה ב-WhatsApp / SMS):</label>
+            <span class="text-[10px] bg-emerald-500/20 text-emerald-300 px-2 py-0.5 rounded">ננעל על מסך הסכמה בלבד</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="shareUrlInput" type="text" readonly class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-emerald-400 font-mono-num focus:outline-none" value="" />
+            <button id="copyShareUrlBtn" class="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition flex items-center gap-1.5">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 012 2v2m-6 12h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z"/></svg>
+              <span>העתק קישור</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-slate-950/90 border border-indigo-500/40 rounded-xl p-3.5 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="block text-xs font-bold text-sky-400">2. קישור לדאשבורד המנהל (עבורך — לצפייה במפה בזמן אמת):</label>
+            <span class="text-[10px] bg-indigo-500/20 text-indigo-300 px-2 py-0.5 rounded">מוקד שליטה</span>
+          </div>
+          <div class="flex items-center gap-2">
+            <input id="modalAdminUrlInput" type="text" readonly class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-sky-400 font-mono-num focus:outline-none" value="" />
+            <button id="copyModalAdminUrlBtn" class="shrink-0 bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold px-3.5 py-2 rounded-lg transition flex items-center gap-1.5">
+              <span>העתק קישור דאשבורד</span>
+            </button>
+          </div>
+        </div>
+
+        <div class="bg-amber-950/30 border border-amber-500/30 rounded-xl p-3 text-xs text-amber-200 leading-relaxed">
+          <strong>איך להשתמש מול טלפונים אמיתיים מחוץ לחלון התצוגה המקדימה?</strong><br/>
+          כרגע האפליקציה רצה בתוך סביבת תצוגה מקדימה מבודדת (Canvas). כדי לקבל כתובת אינטרנט ציבורית (<span class="font-mono-num">https://...</span>) שתיפתח בכל iPhone או Android: הורד את קובץ ה-HTML בלחיצה על כפתור ההורדה למעלה, וגרור אותו בחינם לאתר כמו <strong>Netlify Drop</strong> או <strong>Tiiny.host</strong>. הקישורים למעלה יתעדכנו אוטומטית לכתובת האתר שלך ויסנכרנו מיקומים בזמן אמת דרך ענן WebSocket!
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-3">
+            <div class="font-bold text-sky-400 mb-1 flex items-center gap-1.5">
+              <span></span>
+              <span>תמיכה ב-Safari (iPhone)</span>
+            </div>
+            <p class="text-slate-300 leading-relaxed">
+              מפעיל אוטומטית <span class="font-mono-num text-amber-300">WakeLock</span> + ערוץ שמע שקט (<span class="font-mono-num text-amber-300">WebAudio Keep-Alive</span>) כדי למנוע מ-WebKit להשבית את תהליך האיכון.
+            </p>
+          </div>
+          <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-3">
+            <div class="font-bold text-emerald-400 mb-1 flex items-center gap-1.5">
+              <span>🤖</span>
+              <span>תמיכה ב-Android (Chrome)</span>
+            </div>
+            <p class="text-slate-300 leading-relaxed">
+              משתמש ב-<span class="font-mono-num text-amber-300">HighAccuracy GPS</span> + <span class="font-mono-num text-amber-300">Web Worker Heartbeat</span> לעקיפת השהיית טיימרים (Timer Throttling).
+            </p>
+          </div>
+        </div>
+
+        <div class="bg-indigo-950/40 border border-indigo-500/30 rounded-xl p-3.5 flex items-center justify-between gap-3">
+          <div>
+            <div class="text-xs font-bold text-indigo-300">רוצה לבדוק את חוויית המשתמש עכשיו?</div>
+            <div class="text-xs text-slate-400">עבור למסך אישור ההסכמה של המשתמש והפעל איכון חי מהמכשיר שלך.</div>
+          </div>
+          <button id="jumpToClientViewBtn" class="shrink-0 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-4 py-2.5 rounded-xl transition">
+            פתח כמשתמש קצה ←
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Top Navigation Header -->
+  <header class="bg-slate-900/95 border-b border-slate-800 sticky top-0 z-30 backdrop-blur-md">
+    <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+      <!-- Brand -->
+      <div class="flex items-center gap-3">
+        <div class="relative flex items-center justify-center w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-emerald-500 shadow-lg shadow-indigo-500/20">
+          <svg class="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/>
+          </svg>
+          <span class="absolute -top-1 -right-1 w-3 h-3 rounded-full bg-emerald-400 ring-2 ring-slate-900 animate-pulse"></span>
+        </div>
+        <div>
+          <div class="flex items-center gap-2">
+            <h1 class="text-base sm:text-lg font-extrabold tracking-tight text-white">GeoPulse Live</h1>
+            <span class="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">Always-On Priority</span>
+          </div>
+          <p class="text-xs text-slate-400 hidden sm:block">איכון מכשירים חי מבוסס OpenStreetMap & Nominatim (ללא צורך ב-API Key) • מותאם ל-Safari ו-Android</p>
+        </div>
+      </div>
+
+      <!-- Mode Switcher Tabs -->
+      <nav class="flex items-center bg-slate-950 p-1 rounded-xl border border-slate-800">
+        <button id="tabAdminBtn" class="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 bg-indigo-600 text-white shadow">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"/></svg>
+          <span>מפת שליטה (מנהל)</span>
+        </button>
+        <button id="tabClientBtn" class="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 text-slate-400 hover:text-white">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+          <span>ממשק משתמש (קישור הסכמה)</span>
+          <span id="myDeviceActiveBadge" class="hidden w-2 h-2 rounded-full bg-emerald-400"></span>
+        </button>
+        <button id="tabTechBtn" class="px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 text-slate-400 hover:text-white">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
+          <span class="hidden md:inline">מניעת השבתה (Keep-Alive)</span>
+          <span class="md:hidden">תעדוף</span>
+        </button>
+      </nav>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2">
+        <button id="openShareModalBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition flex items-center gap-1.5 shadow-lg shadow-emerald-600/20">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z"/></svg>
+          <span>שלח קישור למשתמש</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- QUICK LINKS & DEPLOYMENT BAR (Answers: Where is the Agent link & Where is the Dashboard link) -->
+  <div id="topLinksBanner" class="bg-indigo-950/60 border-b border-indigo-500/30 px-4 py-2.5">
+    <div class="max-w-7xl mx-auto flex flex-wrap items-center justify-between gap-3 text-xs">
+      <div class="flex flex-wrap items-center gap-2">
+        <span class="px-2 py-0.5 rounded-md bg-indigo-500/20 border border-indigo-400/40 text-indigo-300 font-bold">קוד חדר סנכרון: <strong id="roomCodeBadge" class="font-mono-num text-white">GP-8842</strong></span>
+        <span id="cloudSyncStatusBadge" class="px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/30 text-emerald-300 font-semibold">☁️ ענן WebSocket מוכן</span>
+      </div>
+      <div class="flex flex-wrap items-center gap-2 flex-1 justify-end">
+        <div class="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1">
+          <span class="text-slate-400 font-semibold">1. קישור ל-Agent (למשתמשים):</span>
+          <input id="quickAgentUrlInput" type="text" readonly class="bg-transparent text-emerald-400 font-mono-num text-[11px] w-44 sm:w-56 focus:outline-none" value="" />
+          <button id="copyQuickAgentBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-0.5 rounded-lg text-[11px] transition">העתק Agent</button>
+          <button id="previewLockedAgentBtn" class="bg-slate-800 hover:bg-slate-700 text-emerald-300 font-semibold px-2 py-0.5 rounded-lg text-[11px] transition" title="הצג איך המשתמש רואה את הקישור">פתח Agent</button>
+        </div>
+        <div class="flex items-center gap-1.5 bg-slate-900/90 border border-slate-700 rounded-xl px-2.5 py-1">
+          <span class="text-slate-400 font-semibold">2. קישור לדאשבורד (מנהל):</span>
+          <input id="quickAdminUrlInput" type="text" readonly class="bg-transparent text-sky-400 font-mono-num text-[11px] w-40 sm:w-52 focus:outline-none" value="" />
+          <button id="copyQuickAdminBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white font-bold px-2 py-0.5 rounded-lg text-[11px] transition">העתק דאשבורד</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== VIEW 1: ADMIN CONTROL MAP ==================== -->
+  <main id="viewAdmin" class="flex-1 max-w-7xl w-full mx-auto p-4 grid grid-cols-1 lg:grid-cols-12 gap-4">
+    <!-- Right Column (in RTL): Connected Devices Sidebar -->
+    <section class="lg:col-span-4 flex flex-col gap-3 order-2 lg:order-1">
+      <!-- KPI Summary Bar -->
+      <div class="grid grid-cols-3 gap-2.5">
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div class="text-[11px] text-slate-400">מכשירים מחוברים</div>
+          <div id="statConnectedCount" class="text-xl font-extrabold text-white mt-0.5 font-mono-num">4</div>
+          <div class="text-[10px] text-emerald-400 flex items-center gap-1 mt-0.5">
+            <span class="w-1.5 h-1.5 rounded-full bg-emerald-400"></span>
+            <span>כולם בהסכמה פעילה</span>
+          </div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div class="text-[11px] text-slate-400">תעדוף דפדפן</div>
+          <div id="statKeepAliveCount" class="text-xl font-extrabold text-emerald-400 mt-0.5 font-mono-num">100%</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">WakeLock + Audio</div>
+        </div>
+        <div class="bg-slate-900 border border-slate-800 rounded-xl p-3">
+          <div class="text-[11px] text-slate-400">דיוק GPS ממוצע</div>
+          <div id="statAvgAccuracy" class="text-xl font-extrabold text-sky-400 mt-0.5 font-mono-num">±6m</div>
+          <div class="text-[10px] text-slate-400 mt-0.5">High-Accuracy</div>
+        </div>
+      </div>
+
+      <!-- Filter & Controls Card -->
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3.5 flex flex-col gap-3 flex-1">
+        <div class="flex items-center justify-between gap-2">
+          <h2 class="text-sm font-bold text-white flex items-center gap-2">
+            <span>מכשירים משדרים בזמן אמת</span>
+            <span id="livePingIndicator" class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
+          </h2>
+          <button id="fitAllMarkersBtn" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 transition">
+            מרכז את כולם במפה
+          </button>
+        </div>
+
+        <!-- Search & Platform Filter -->
+        <div class="flex flex-col sm:flex-row gap-2">
+          <input id="deviceSearchInput" type="text" placeholder="חיפוש לפי שם או מזהה מכשיר..." class="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-indigo-500" />
+          <select id="osFilterSelect" class="bg-slate-950 border border-slate-800 rounded-xl px-2.5 py-1.5 text-xs text-slate-300 focus:outline-none focus:border-indigo-500">
+            <option value="all">כל הפלטפורמות</option>
+            <option value="ios">Safari (iOS)</option>
+            <option value="android">Android (Chrome)</option>
+          </select>
+        </div>
+
+        <!-- Device List -->
+        <div id="deviceListContainer" class="flex flex-col gap-2.5 overflow-y-auto max-h-[380px] pr-0.5"></div>
+
+        <!-- Simulation & Self-Test Footer -->
+        <div class="mt-auto pt-3 border-t border-slate-800/80 flex flex-col gap-2">
+          <div class="flex items-center justify-between text-xs">
+            <label class="flex items-center gap-2 text-slate-300 cursor-pointer">
+              <input id="toggleSimMovement" type="checkbox" checked class="rounded bg-slate-800 border-slate-700 text-indigo-600 focus:ring-0" />
+              <span>סימולציית תנועה חיה למכשירי הדגמה</span>
+            </label>
+            <button id="addDemoDeviceBtn" class="text-xs text-emerald-400 hover:text-emerald-300 font-semibold">
+              + הוסף מכשיר סימולציה
+            </button>
+          </div>
+          <button id="quickConnectMyGpsBtn" class="w-full py-2 px-3 rounded-xl bg-indigo-600/20 hover:bg-indigo-600/30 border border-indigo-500/40 text-indigo-300 text-xs font-bold transition flex items-center justify-center gap-2">
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z"/></svg>
+            <span>חבר את המכשיר שלי עכשיו (בדיקת GPS אמיתי)</span>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Left Column (in RTL): Interactive Leaflet Map & Live Telemetry -->
+    <section class="lg:col-span-8 flex flex-col gap-3 order-1 lg:order-2">
+      <div class="bg-slate-900 border border-slate-800 rounded-2xl overflow-hidden flex flex-col flex-1 relative min-h-[460px]">
+        <!-- Map Floating Overlay Top Bar -->
+        <div class="absolute top-3 right-3 left-14 z-20 flex flex-wrap items-center justify-between gap-2 pointer-events-none">
+          <div class="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl px-3 py-1.5 flex items-center gap-3 text-xs pointer-events-auto shadow-lg">
+            <span class="flex items-center gap-1.5 text-sky-400 font-semibold">
+              <span class="w-2.5 h-2.5 rounded-full bg-sky-400 inline-block"></span>
+              <span>Safari iOS</span>
+            </span>
+            <span class="text-slate-600">|</span>
+            <span class="flex items-center gap-1.5 text-emerald-400 font-semibold">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 inline-block"></span>
+              <span>Android Chrome</span>
+            </span>
+            <span class="text-slate-600">|</span>
+            <span class="flex items-center gap-1.5 text-amber-400 font-semibold">
+              <span class="w-2.5 h-2.5 rounded-full bg-amber-400 inline-block"></span>
+              <span>המכשיר שלך</span>
+            </span>
+          </div>
+
+          <div class="flex flex-wrap items-center gap-1.5 pointer-events-auto">
+            <div class="flex items-center bg-slate-900/95 backdrop-blur-md border border-slate-700 rounded-xl overflow-hidden shadow-lg">
+              <input id="osmSearchInput" type="text" placeholder="חיפוש רחוב/עיר ב-OpenStreetMap..." class="bg-transparent text-white text-xs px-2.5 py-1.5 w-44 focus:outline-none" />
+              <button id="osmSearchBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold px-2.5 py-1.5 transition">חפש</button>
+            </div>
+            <button id="toggleMapThemeBtn" class="bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md border border-emerald-500/40 text-emerald-300 text-xs font-semibold px-3 py-1.5 rounded-xl shadow-lg transition">
+              מפה: רחובות OSM (ללא API Key)
+            </button>
+            <button id="toggleTrailsBtn" class="bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md border border-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-xl shadow-lg transition">
+              מסלולי תנועה: פעיל
+            </button>
+            <button id="toggleFollowBtn" class="bg-slate-900/90 hover:bg-slate-800 backdrop-blur-md border border-slate-700 text-slate-200 text-xs px-3 py-1.5 rounded-xl shadow-lg transition">
+              מעקב אוטומטי: כבוי
+            </button>
+          </div>
+        </div>
+
+        <!-- The Leaflet Map -->
+        <div id="mapContainer" class="flex-1"></div>
+
+        <!-- Selected Device Bottom Telemetry Drawer -->
+        <div id="selectedDeviceBar" class="bg-slate-900/95 border-t border-slate-800 p-3 flex flex-wrap items-center justify-between gap-3 text-xs">
+          <div class="flex items-center gap-3">
+            <div id="selDeviceBadge" class="w-9 h-9 rounded-xl bg-sky-500/20 border border-sky-500/40 flex items-center justify-center text-lg"></div>
+            <div>
+              <div class="flex items-center gap-2">
+                <span id="selDeviceName" class="font-bold text-white text-sm">בחר מכשיר מהרשימה או מהמפה</span>
+                <span id="selDeviceOsTag" class="px-2 py-0.5 rounded bg-slate-800 text-slate-300 text-[11px]">Safari 17 • iOS</span>
+              </div>
+              <div id="selDeviceMeta" class="text-slate-400 text-[11px] mt-0.5">הסכמה אושרה • WakeLock נעול • ערוץ Keep-Alive פעיל</div>
+              <div id="selDeviceAddress" class="text-emerald-400 text-xs font-semibold mt-0.5">📍 כתובת (OSM Nominatim): דרך העצמאות, יהוד-מונוסון</div>
+            </div>
+          </div>
+          <div class="flex items-center gap-4 font-mono-num text-xs">
+            <div>
+              <span class="text-slate-500 block text-[10px]">קואורדינטות</span>
+              <span id="selDeviceCoords" class="text-emerald-400 font-semibold">32.0310, 34.8885</span>
+            </div>
+            <div>
+              <span class="text-slate-500 block text-[10px]">מהירות</span>
+              <span id="selDeviceSpeed" class="text-white font-semibold">14 km/h</span>
+            </div>
+            <div>
+              <span class="text-slate-500 block text-[10px]">סוללה</span>
+              <span id="selDeviceBattery" class="text-amber-300 font-semibold">88%</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ==================== VIEW 2: END-USER CONSENT & TRACKER LINK VIEW ==================== -->
+  <section id="viewClient" class="hidden flex-1 max-w-2xl w-full mx-auto p-4 flex-col justify-center">
+    <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-2xl space-y-5">
+      <!-- Top Phone Header Badge -->
+      <div class="flex items-center justify-between border-b border-slate-800 pb-4">
+        <div class="flex items-center gap-3">
+          <div class="w-11 h-11 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center text-emerald-400">
+            <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z"/></svg>
+          </div>
+          <div>
+            <span class="text-[11px] font-bold uppercase tracking-wider text-emerald-400">קישור אימות והסכמת מיקום</span>
+            <h2 class="text-lg font-extrabold text-white">חיבור מכשיר למערכת השליטה</h2>
+          </div>
+        </div>
+        <div class="flex items-center gap-2">
+          <div id="detectedPlatformPill" class="px-3 py-1 rounded-full bg-slate-800 border border-slate-700 text-xs font-semibold text-slate-300">
+            זיהוי דפדפן...
+          </div>
+          <button id="exitAgentLockBtn" class="hidden px-2.5 py-1 rounded-lg bg-slate-800 hover:bg-slate-700 text-[11px] text-indigo-300 border border-indigo-500/30 transition">
+            חזור לדאשבורד מנהל
+          </button>
+        </div>
+      </div>
+
+      <!-- STEP 1: Consent Form (Shown before user starts tracking) -->
+      <div id="clientConsentStep" class="space-y-4">
+        <div class="bg-slate-950/80 border border-slate-800 rounded-2xl p-4 space-y-2.5 text-xs sm:text-sm text-slate-300 leading-relaxed">
+          <p class="font-semibold text-white">שלום! התבקשת לשתף את מיקום המכשיר שלך בזמן אמת על גבי מפת המערכת.</p>
+          <ul class="space-y-1.5 text-xs text-slate-400 list-disc list-inside">
+            <li>השיתוף מופעל <strong class="text-slate-200">אך ורק לאחר אישור ההסכמה שלך</strong> וניתן להפסקה בכל רגע בלחיצת כפתור.</li>
+            <li>כדי שהאיכון יפעל ברציפות ללא השבתה על ידי הדפדפן (במיוחד ב-Safari וב-Android), הדף יפעיל <strong class="text-emerald-400">נעילת מסך חכמה (Wake Lock)</strong> ו-<strong class="text-emerald-400">ערוץ תעדוף ברקע (Keep-Alive)</strong>.</li>
+            <li>ניתן להפעיל <strong class="text-sky-400">מצב החשכת מסך (OLED Saver)</strong> כדי לחסוך בסוללה בזמן שהמכשיר משדר.</li>
+          </ul>
+        </div>
+
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1.5">שם המשתמש / כינוי המכשיר במפה:</label>
+            <input id="clientNameInput" type="text" value="המכשיר שלי (חיבור חי)" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500" />
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-300 mb-1.5">סוג מערכת הפעלה ודפדפן:</label>
+            <select id="clientOsSelect" class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white focus:outline-none focus:border-emerald-500">
+              <option value="ios">iPhone / iPad — Safari (WebKit)</option>
+              <option value="android">Android — Chrome / Samsung Browser</option>
+            </select>
+          </div>
+        </div>
+
+        <!-- OpenStreetMap Keyless Location / Address Resolver in Client View -->
+        <div class="bg-slate-950/90 border border-emerald-500/30 rounded-2xl p-3.5 space-y-2">
+          <div class="flex items-center justify-between">
+            <label class="text-xs font-bold text-emerald-400">איכון משולב GPS + OpenStreetMap Nominatim (ללא API Key):</label>
+            <span class="text-[10px] bg-emerald-500/15 text-emerald-300 px-2 py-0.5 rounded">חינמי לחלוטין • ללא מפתח</span>
+          </div>
+          <p class="text-[11px] text-slate-400">המערכת שואבת קואורדינטות GPS מהדפדפן ומתרגמת אותן אוטומטית לכתובת רחוב מלאה דרך שרתי OpenStreetMap החופשיים. ניתן גם להזין או לחפש מיקום לפי כתובת רחוב/עיר:</p>
+          <div class="flex items-center gap-2">
+            <input id="clientOsmAddressInput" type="text" placeholder="אופציונלי: הזן רחוב ועיר לאיכון מבוסס OpenStreetMap (למשל: ויצמן יהוד)..." class="flex-1 bg-slate-900 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-emerald-500" />
+            <button id="clientOsmLocateBtn" type="button" class="shrink-0 bg-emerald-600/30 hover:bg-emerald-600/50 border border-emerald-500/40 text-emerald-300 text-xs font-bold px-3 py-2 rounded-xl transition">
+              אתר כתובת ב-OSM
+            </button>
+          </div>
+          <div id="clientOsmPreviewStatus" class="text-[11px] text-sky-400 hidden"></div>
+        </div>
+
+        <!-- Explicit Consent Checkbox -->
+        <label class="flex items-start gap-3 p-3.5 rounded-2xl bg-indigo-950/30 border border-indigo-500/30 cursor-pointer">
+          <input id="clientConsentCheckbox" type="checkbox" checked class="mt-1 w-4 h-4 rounded bg-slate-900 border-slate-600 text-emerald-500 focus:ring-0" />
+          <span class="text-xs text-slate-200 leading-relaxed">
+            <strong>אני מאשר/ת מרצוני החופשי</strong> שיתוף של מיקום המכשיר שלי בזמן אמת עם בעל המערכת, ומאשר/ת למנוע מהדפדפן להשבית את תהליך האיכון כל עוד החיבור פעיל.
+          </span>
+        </label>
+
+        <!-- Primary Consent & Activation Button (Triggers User Gesture for Geolocation + WakeLock + AudioContext) -->
+        <button id="startClientTrackingBtn" class="w-full py-3.5 px-5 rounded-2xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-sm sm:text-base shadow-xl shadow-emerald-600/25 transition flex items-center justify-center gap-2.5">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 11a3 3 0 11-6 0 3 3 0 016 0z"/></svg>
+          <span>אשר הסכמה והפעל איכון רציף בעדיפות גבוהה</span>
+        </button>
+      </div>
+
+      <!-- STEP 2: Active High-Priority Tracking Dashboard (Shown once consented) -->
+      <div id="clientActiveStep" class="hidden space-y-4">
+        <div class="bg-emerald-950/40 border border-emerald-500/40 rounded-2xl p-4 flex flex-wrap items-center justify-between gap-3">
+          <div class="flex items-center gap-3">
+            <span class="w-3.5 h-3.5 rounded-full bg-emerald-400 animate-ping"></span>
+            <div>
+              <div class="text-sm font-extrabold text-emerald-300">שידור מיקום חי פעיל ומוגן מהשבתה (OpenStreetMap)</div>
+              <div id="clientSourceModeText" class="text-xs text-slate-300">מחובר ל-GPS המכשיר + פענוח כתובת חי מ-OpenStreetMap (ללא API Key)</div>
+              <div id="clientLiveOsmAddress" class="text-xs font-bold text-amber-300 mt-1">📍 כתובת מזוהה: מאתר רחוב דרך OpenStreetMap...</div>
+            </div>
+          </div>
+          <button id="viewOnAdminMapBtn" class="bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold px-3.5 py-2 rounded-xl transition">
+            צפה בעצמך על המפה ←
+          </button>
+        </div>
+
+        <!-- Live Telemetry Grid -->
+        <div class="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400">קו רוחב / אורך</div>
+            <div id="clientLiveCoords" class="text-xs font-bold text-white mt-1 font-mono-num">32.0312, 34.8891</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400">דיוק אות GPS</div>
+            <div id="clientLiveAccuracy" class="text-xs font-bold text-emerald-400 mt-1 font-mono-num">±5 מטר</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400">חבילות מיקום שנשלחו</div>
+            <div id="clientPingCounter" class="text-xs font-bold text-sky-400 mt-1 font-mono-num">1</div>
+          </div>
+          <div class="bg-slate-950 border border-slate-800 rounded-xl p-3">
+            <div class="text-[11px] text-slate-400">עדכון אחרון</div>
+            <div id="clientLastUpdate" class="text-xs font-bold text-amber-300 mt-1">לפני שנייה</div>
+          </div>
+        </div>
+
+        <!-- Anti-Throttling Protection Layers Status -->
+        <div class="bg-slate-950 border border-slate-800 rounded-2xl p-4 space-y-3">
+          <div class="flex items-center justify-between">
+            <h3 class="text-xs font-bold text-slate-200">מנגנוני הגנה מפני השבתת דפדפן (Safari & Android):</h3>
+            <span class="text-[11px] text-emerald-400 font-semibold">4 שכבות הגנה פעילות</span>
+          </div>
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+            <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <span>1. נעילת מסך (Screen Wake Lock)</span>
+              <span id="statusWakeLock" class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold">פעיל</span>
+            </div>
+            <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <span>2. ערוץ שמע שקט (Safari Audio Keep-Alive)</span>
+              <span id="statusAudioKeepAlive" class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold">פעיל</span>
+            </div>
+            <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <span>3. תהליך Web Worker ברקע</span>
+              <span id="statusWorkerHeartbeat" class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold">פעיל (2s)</span>
+            </div>
+            <div class="flex items-center justify-between p-2.5 rounded-xl bg-slate-900 border border-slate-800">
+              <span>4. GPS בעדיפות גבוהה (HighAccuracy)</span>
+              <span id="statusHighAccuracy" class="px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold">פעיל</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Action Buttons: OLED Dimmer & Simulate Step & Stop -->
+        <div class="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <button id="enableOledModeBtn" class="py-2.5 px-3 rounded-xl bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-bold text-white transition flex items-center justify-center gap-1.5">
+            <span>🌙</span>
+            <span>החשכת מסך (OLED Saver)</span>
+          </button>
+          <button id="nudgeMyLocationBtn" class="py-2.5 px-3 rounded-xl bg-indigo-600/25 hover:bg-indigo-600/40 border border-indigo-500/40 text-xs font-bold text-indigo-300 transition flex items-center justify-center gap-1.5">
+            <span>📍</span>
+            <span>דמה תזוזת הליכה (בדיקה)</span>
+          </button>
+          <button id="stopClientTrackingBtn" class="py-2.5 px-3 rounded-xl bg-rose-600/20 hover:bg-rose-600/30 border border-rose-500/40 text-xs font-bold text-rose-300 transition flex items-center justify-center gap-1.5">
+            <span>⏹</span>
+            <span>בטל הסכמה והפסק שידור</span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ==================== VIEW 3: KEEP-ALIVE & TECHNICAL ARCHITECTURE ==================== -->
+  <section id="viewTech" class="hidden flex-1 max-w-5xl w-full mx-auto p-4 space-y-4">
+    <div class="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-5">
+      <div class="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-4">
+        <div>
+          <h2 class="text-lg font-extrabold text-white">מנוע תעדוף ומניעת השבתת איכון בדפדפן (Safari iOS & Android)</h2>
+          <p class="text-xs text-slate-400 mt-0.5">הגדרות קצב דגימה, ניהול Keep-Alive ויומן שידורים חי</p>
+        </div>
+        <div class="flex items-center gap-2">
+          <button id="exportLogsCsvBtn" class="bg-slate-800 hover:bg-slate-700 border border-slate-700 text-xs font-semibold px-3.5 py-2 rounded-xl text-slate-200 transition">
+            ייצוא יומן מיקומים (CSV)
+          </button>
+        </div>
+      </div>
+
+      <!-- Technical Controls -->
+      <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <label class="block text-xs font-bold text-slate-300">תדירות שידור מיקום (Heartbeat Interval):</label>
+          <select id="pingIntervalSelect" class="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-white">
+            <option value="1000">כל שנייה (1s — זמן אמת מרבי)</option>
+            <option value="2000" selected>כל 2 שניות (2s — מומלץ ומאוזן)</option>
+            <option value="5000">כל 5 שניות (5s — חיסכון סוללה)</option>
+          </select>
+          <p class="text-[11px] text-slate-400">מבוצע דרך תהליך <span class="font-mono-num text-emerald-400">Web Worker</span> עצמאי שאינו מואט על ידי ה-Main Thread.</p>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="text-xs font-bold text-sky-400">איך מונעים השבתה ב-Safari (iOS)?</div>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            דפדפן Safari משבית טאבים לאחר כ-30 שניות ללא פעילות. המערכת שלנו מפעילה בלחיצת ההסכמה <strong class="text-white">WakeLock API</strong> יחד עם <strong class="text-white">WebAudio Silent Oscillator</strong> בתדר בלתי נשמע, כך שמערכת iOS מסווגת את הדף כנגן מדיה חי ונותנת לו תעדוף מעבד ורשת רציף.
+          </p>
+        </div>
+
+        <div class="bg-slate-950 border border-slate-800 rounded-xl p-4 space-y-2">
+          <div class="text-xs font-bold text-emerald-400">איך מונעים השבתה ב-Android (Chrome)?</div>
+          <p class="text-xs text-slate-300 leading-relaxed">
+            באנדרואיד, Chrome מפעיל מנגנון Doze/Throttling לאחר 5 דקות. שילוב של <strong class="text-white">watchPosition(enableHighAccuracy)</strong> + <strong class="text-white">Screen Wake Lock</strong> + <strong class="text-white">מצב החשכת OLED</strong> שומר את מקלט ה-GPS פתוח ברציפות ללא כיבוי.
+          </p>
+        </div>
+      </div>
+
+      <!-- Real-Time Telemetry Log Table -->
+      <div class="space-y-2">
+        <div class="flex items-center justify-between">
+          <h3 class="text-xs font-bold text-slate-300">יומן חבילות מיקום שהתקבלו במוקד (Live Telemetry Stream):</h3>
+          <button id="clearLogsBtn" class="text-xs text-slate-400 hover:text-white">נקה יומן</button>
+        </div>
+        <div class="bg-slate-950 border border-slate-800 rounded-xl overflow-hidden">
+          <div class="max-h-60 overflow-y-auto">
+            <table class="w-full text-right text-xs">
+              <thead class="bg-slate-900 text-slate-400 border-b border-slate-800 sticky top-0">
+                <tr>
+                  <th class="py-2.5 px-3">זמן</th>
+                  <th class="py-2.5 px-3">שם מכשיר</th>
+                  <th class="py-2.5 px-3">פלטפורמה</th>
+                  <th class="py-2.5 px-3">קואורדינטות</th>
+                  <th class="py-2.5 px-3">דיוק</th>
+                  <th class="py-2.5 px-3">סטטוס תעדוף</th>
+                </tr>
+              </thead>
+              <tbody id="telemetryLogBody" class="divide-y divide-slate-800/60 font-mono-num text-[11px]"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <script>
+    // =========================================================================
+    // GeoPulse Live — Complete Real-Time Device Location & Anti-Throttling App
+    // =========================================================================
+
+    // 1. Initial Connected Devices State (Includes realistic Israel locations + user's own device slot)
+    const state = {
+      activeTab: 'admin',
+      selectedDeviceId: 'dev-1',
+      showTrails: true,
+      autoFollow: false,
+      simMovement: true,
+      pingIntervalMs: 2000,
+      clientTrackingActive: false,
+      clientPingCount: 0,
+      wakeLockSentinel: null,
+      audioCtx: null,
+      silentOsc: null,
+      worker: null,
+      geoWatchId: null,
+      broadcastChannel: null,
+      telemetryLogs: [],
+      devices: [
+        {
+          id: 'dev-1',
+          name: 'עומר כהן — נייד שטח',
+          os: 'ios',
+          browser: 'Safari 17.4 (iOS)',
+          address: 'דרך העצמאות, יהוד-מונוסון',
+          lat: 32.0315,
+          lng: 34.8888,
+          accuracy: 5,
+          speed: 18,
+          battery: 89,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: '07:40',
+          lastPing: Date.now(),
+          color: '#38bdf8',
+          isSelf: false,
+          heading: 0.00022,
+          trail: [
+            [32.0298, 34.8865],
+            [32.0306, 34.8876],
+            [32.0315, 34.8888]
+          ]
+        },
+        {
+          id: 'dev-2',
+          name: 'נועה לוי — שליחויות מרכז',
+          os: 'android',
+          browser: 'Chrome 124 (Android)',
+          address: 'שדרות רוטשילד, תל אביב-יפו',
+          lat: 32.0622,
+          lng: 34.7795,
+          accuracy: 4,
+          speed: 34,
+          battery: 76,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: '07:32',
+          lastPing: Date.now(),
+          color: '#34d399',
+          isSelf: false,
+          heading: -0.00025,
+          trail: [
+            [32.0645, 34.7820],
+            [32.0633, 34.7808],
+            [32.0622, 34.7795]
+          ]
+        },
+        {
+          id: 'dev-3',
+          name: 'דניאל מזרחי — סיור צפון ת"א',
+          os: 'ios',
+          browser: 'Safari 17.5 (iOS)',
+          address: 'אבן גבירול, תל אביב-יפו',
+          lat: 32.0853,
+          lng: 34.7818,
+          accuracy: 8,
+          speed: 12,
+          battery: 94,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: '07:48',
+          lastPing: Date.now(),
+          color: '#818cf8',
+          isSelf: false,
+          heading: 0.00018,
+          trail: [
+            [32.0839, 34.7801],
+            [32.0846, 34.7810],
+            [32.0853, 34.7818]
+          ]
+        },
+        {
+          id: 'dev-4',
+          name: 'מאיה אברהם — צוות תגובה',
+          os: 'android',
+          browser: 'Chrome 125 (Android)',
+          address: 'שדרות ירושלים, חולון',
+          lat: 31.9950,
+          lng: 34.8260,
+          accuracy: 6,
+          speed: 26,
+          battery: 64,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: '07:19',
+          lastPing: Date.now(),
+          color: '#f472b6',
+          isSelf: false,
+          heading: -0.00019,
+          trail: [
+            [31.9968, 34.8280],
+            [31.9959, 34.8270],
+            [31.9950, 34.8260]
+          ]
+        }
+      ]
+    };
+
+    // Map instances & layers
+    let map = null;
+    const markersMap = {};
+    const accuracyCirclesMap = {};
+    const trailsMap = {};
+
+    // Toast helper
+    function showToast(message, type = 'success') {
+      const container = document.getElementById('toastContainer');
+      const el = document.createElement('div');
+      const colors = type === 'success'
+        ? 'bg-emerald-950/95 border-emerald-500/50 text-emerald-200'
+        : type === 'warning'
+        ? 'bg-amber-950/95 border-amber-500/50 text-amber-200'
+        : 'bg-indigo-950/95 border-indigo-500/50 text-indigo-200';
+      el.className = `px-4 py-2.5 rounded-xl border text-xs font-semibold shadow-xl backdrop-blur-md transition-all duration-300 ${colors}`;
+      el.textContent = message;
+      container.appendChild(el);
+      setTimeout(() => {
+        el.style.opacity = '0';
+        setTimeout(() => el.remove(), 300);
+      }, 3200);
+    }
+
+    // Detect current user's platform for the Client Consent screen
+    function detectUserPlatform() {
+      const ua = navigator.userAgent || '';
+      const isIOS = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+      const isAndroid = /Android/.test(ua);
+      const pill = document.getElementById('detectedPlatformPill');
+      const select = document.getElementById('clientOsSelect');
+      if (isIOS) {
+        pill.textContent = ' זוהה: Safari (iOS)';
+        select.value = 'ios';
+      } else if (isAndroid) {
+        pill.textContent = '🤖 זוהה: Android Browser';
+        select.value = 'android';
+      } else {
+        pill.textContent = '💻 דפדפן מחשב / סימולטור נייד';
+      }
+    }
+
+    let osmStandardLayer = null;
+    let osmDarkLayer = null;
+    let usingStandardOsm = true;
+    let customClientCoords = null;
+
+    // Initialize Leaflet Map with Keyless OpenStreetMap Tiles
+    function initMap() {
+      map = L.map('mapContainer', {
+        center: [32.0450, 34.8300],
+        zoom: 12,
+        zoomControl: true
+      });
+
+      // 1. Official OpenStreetMap Standard Street Tiles (100% Free, Zero API Key)
+      osmStandardLayer = L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors (No API Key)',
+        maxZoom: 19
+      });
+
+      // 2. Dark OpenStreetMap Carto Layer (Also Free, Zero API Key)
+      osmDarkLayer = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; OpenStreetMap &copy; CARTO',
+        subdomains: 'abcd',
+        maxZoom: 19
+      });
+
+      osmStandardLayer.addTo(map);
+      syncAllMapLayers();
+    }
+
+    // Keyless OpenStreetMap Nominatim Reverse Geocoding (Coords -> Hebrew Street Address)
+    async function reverseGeocodeOSM(lat, lng, devObj) {
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lng)}&accept-language=he`;
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data && data.address) {
+          const road = data.address.road || data.address.pedestrian || data.address.neighbourhood || '';
+          const house = data.address.house_number ? ` ${data.address.house_number}` : '';
+          const city = data.address.city || data.address.town || data.address.village || data.address.municipality || '';
+          const formatted = [road + house, city].filter(Boolean).join(', ') || (data.display_name ? data.display_name.split(',').slice(0, 2).join(', ') : '');
+          if (formatted && devObj) {
+            devObj.address = formatted;
+            const liveAddrEl = document.getElementById('clientLiveOsmAddress');
+            if (liveAddrEl && devObj.isSelf) {
+              liveAddrEl.textContent = `📍 כתובת מזוהה (OSM): ${formatted}`;
+            }
+            renderDeviceList();
+            syncAllMapLayers();
+          }
+        }
+      } catch (e) {}
+    }
+
+    // Keyless OpenStreetMap Nominatim Forward Geocoding (Street/City -> Coords)
+    async function searchAddressOSM(query) {
+      if (!query || !query.trim()) return null;
+      try {
+        const url = `https://nominatim.openstreetmap.org/search?format=jsonv2&q=${encodeURIComponent(query.trim())}&limit=1&accept-language=he`;
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if (!res.ok) return null;
+        const results = await res.json();
+        if (Array.isArray(results) && results.length > 0) {
+          return {
+            lat: parseFloat(results[0].lat),
+            lng: parseFloat(results[0].lon),
+            displayName: results[0].display_name.split(',').slice(0, 3).join(', ')
+          };
+        }
+      } catch (e) {}
+      return null;
+    }
+
+    // Build custom HTML marker icon
+    function buildDeviceIcon(dev, isSelected) {
+      const platformBadge = dev.os === 'ios' ? '' : '🤖';
+      const ringSize = isSelected ? 'w-10 h-10 ring-2 ring-white' : 'w-8 h-8';
+      return L.divIcon({
+        className: 'custom-device-marker',
+        html: `
+          <div class="relative flex items-center justify-center" style="width:40px;height:40px;">
+            <span class="absolute w-9 h-9 rounded-full marker-pulse" style="background:${dev.color}44;"></span>
+            <div class="relative ${ringSize} rounded-full flex items-center justify-center text-xs font-bold shadow-lg transition-transform"
+                 style="background:${dev.color}; color:#0f172a; border:2px solid #0f172a;">
+              ${dev.isSelf ? '📍' : platformBadge}
+            </div>
+          </div>
+        `,
+        iconSize: [40, 40],
+        iconAnchor: [20, 20],
+        popupAnchor: [0, -18]
+      });
+    }
+
+    function buildPopupHtml(dev) {
+      const osLabel = dev.os === 'ios' ? 'Safari • iOS' : 'Chrome • Android';
+      return `
+        <div class="space-y-1.5 text-xs min-w-[190px]">
+          <div class="flex items-center justify-between gap-2 border-b border-slate-700 pb-1">
+            <span class="font-bold text-white">${dev.name}</span>
+            <span class="px-1.5 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-300 font-semibold">פעיל</span>
+          </div>
+          <div class="text-emerald-300 font-semibold">📍 ${dev.address || 'מיקום מאומת ב-OpenStreetMap'}</div>
+          <div class="text-slate-300">פלטפורמה: <strong>${osLabel}</strong></div>
+          <div class="text-slate-300 font-mono-num">קואורדינטות: ${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}</div>
+          <div class="text-slate-300">דיוק GPS: <strong>±${dev.accuracy}m</strong> • סוללה: <strong>${dev.battery}%</strong></div>
+          <div class="text-[11px] text-emerald-400 font-semibold">✓ WakeLock + Keep-Alive פעיל</div>
+        </div>
+      `;
+    }
+
+    // Sync markers, accuracy circles, and movement trails on the Leaflet map
+    function syncAllMapLayers() {
+      if (!map) return;
+
+      state.devices.forEach((dev) => {
+        const isSelected = dev.id === state.selectedDeviceId;
+
+        // Marker
+        if (!markersMap[dev.id]) {
+          const marker = L.marker([dev.lat, dev.lng], {
+            icon: buildDeviceIcon(dev, isSelected)
+          }).addTo(map);
+          marker.bindPopup(buildPopupHtml(dev));
+          marker.on('click', () => {
+            selectDevice(dev.id, false);
+          });
+          markersMap[dev.id] = marker;
+        } else {
+          markersMap[dev.id].setLatLng([dev.lat, dev.lng]);
+          markersMap[dev.id].setIcon(buildDeviceIcon(dev, isSelected));
+          markersMap[dev.id].setPopupContent(buildPopupHtml(dev));
+        }
+
+        // Accuracy circle
+        if (!accuracyCirclesMap[dev.id]) {
+          accuracyCirclesMap[dev.id] = L.circle([dev.lat, dev.lng], {
+            radius: Math.max(dev.accuracy * 8, 35),
+            color: dev.color,
+            fillColor: dev.color,
+            fillOpacity: 0.12,
+            weight: 1
+          }).addTo(map);
+        } else {
+          accuracyCirclesMap[dev.id].setLatLng([dev.lat, dev.lng]);
+          accuracyCirclesMap[dev.id].setRadius(Math.max(dev.accuracy * 8, 35));
+        }
+
+        // Trail polyline
+        if (!trailsMap[dev.id]) {
+          trailsMap[dev.id] = L.polyline(dev.trail, {
+            color: dev.color,
+            weight: 3,
+            opacity: state.showTrails ? 0.75 : 0,
+            dashArray: '6, 6'
+          }).addTo(map);
+        } else {
+          trailsMap[dev.id].setLatLngs(dev.trail);
+          trailsMap[dev.id].setStyle({ opacity: state.showTrails ? 0.75 : 0 });
+        }
+      });
+
+      // Follow selected device if enabled
+      if (state.autoFollow && state.selectedDeviceId) {
+        const sel = state.devices.find(d => d.id === state.selectedDeviceId);
+        if (sel) {
+          map.panTo([sel.lat, sel.lng], { animate: true });
+        }
+      }
+    }
+
+    // Render sidebar device cards and KPI summary
+    function renderDeviceList() {
+      const container = document.getElementById('deviceListContainer');
+      const search = (document.getElementById('deviceSearchInput').value || '').trim().toLowerCase();
+      const osFilter = document.getElementById('osFilterSelect').value;
+
+      const filtered = state.devices.filter((d) => {
+        const matchesSearch = !search || d.name.toLowerCase().includes(search) || d.browser.toLowerCase().includes(search);
+        const matchesOs = osFilter === 'all' || d.os === osFilter;
+        return matchesSearch && matchesOs;
+      });
+
+      document.getElementById('statConnectedCount').textContent = String(state.devices.length);
+      const avgAcc = Math.round(state.devices.reduce((acc, d) => acc + d.accuracy, 0) / Math.max(1, state.devices.length));
+      document.getElementById('statAvgAccuracy').textContent = `±${avgAcc}m`;
+
+      container.innerHTML = '';
+      filtered.forEach((dev) => {
+        const isSelected = dev.id === state.selectedDeviceId;
+        const secondsAgo = Math.max(0, Math.round((Date.now() - dev.lastPing) / 1000));
+        const card = document.createElement('div');
+        card.className = `p-3 rounded-xl border transition cursor-pointer ${
+          isSelected
+            ? 'bg-indigo-950/50 border-indigo-500/70 shadow-md'
+            : 'bg-slate-950/80 border-slate-800 hover:border-slate-700'
+        }`;
+        card.innerHTML = `
+          <div class="flex items-start justify-between gap-2">
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-lg flex items-center justify-center text-sm font-bold shrink-0"
+                   style="background:${dev.color}22; color:${dev.color}; border:1px solid ${dev.color}55;">
+                ${dev.isSelf ? '📍' : (dev.os === 'ios' ? '' : '🤖')}
+              </div>
+              <div>
+                <div class="text-xs font-bold text-white flex items-center gap-1.5">
+                  <span>${dev.name}</span>
+                  ${dev.isSelf ? '<span class="px-1.5 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-300">את/ה</span>' : ''}
+                </div>
+                <div class="text-[11px] text-slate-400">${dev.browser}</div>
+                <div class="text-[11px] text-emerald-400 font-medium mt-0.5">📍 ${dev.address || 'פענוח כתובת OSM...'}</div>
+              </div>
+            </div>
+            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
+              WakeLock פעיל
+            </span>
+          </div>
+          <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono-num">
+            <span>${dev.lat.toFixed(4)}, ${dev.lng.toFixed(4)}</span>
+            <span>±${dev.accuracy}m • ${dev.battery}% 🔋</span>
+            <span class="text-emerald-400">${secondsAgo === 0 ? 'כעת' : `לפני ${secondsAgo}ש'`}</span>
+          </div>
+        `;
+        card.addEventListener('click', () => selectDevice(dev.id, true));
+        container.appendChild(card);
+      });
+
+      updateSelectedDeviceBar();
+    }
+
+    function selectDevice(deviceId, panToMarker = true) {
+      state.selectedDeviceId = deviceId;
+      renderDeviceList();
+      syncAllMapLayers();
+      const dev = state.devices.find(d => d.id === deviceId);
+      if (dev && map && panToMarker) {
+        map.flyTo([dev.lat, dev.lng], 15, { duration: 0.7 });
+        if (markersMap[dev.id]) {
+          markersMap[dev.id].openPopup();
+        }
+      }
+    }
+
+    function updateSelectedDeviceBar() {
+      const dev = state.devices.find(d => d.id === state.selectedDeviceId) || state.devices[0];
+      if (!dev) return;
+      document.getElementById('selDeviceBadge').textContent = dev.isSelf ? '📍' : (dev.os === 'ios' ? '' : '🤖');
+      document.getElementById('selDeviceName').textContent = dev.name;
+      document.getElementById('selDeviceOsTag').textContent = dev.browser;
+      document.getElementById('selDeviceMeta').textContent = `הסכמה אושרה (${dev.consentTime}) • WakeLock נעול • ערוץ Keep-Alive פעיל`;
+      const addrEl = document.getElementById('selDeviceAddress');
+      if (addrEl) addrEl.textContent = `📍 כתובת (OSM Nominatim): ${dev.address || 'מתרגם קואורדינטות...'}`;
+      document.getElementById('selDeviceCoords').textContent = `${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}`;
+      document.getElementById('selDeviceSpeed').textContent = `${dev.speed} km/h`;
+      document.getElementById('selDeviceBattery').textContent = `${dev.battery}%`;
+    }
+
+    // Append a telemetry log entry
+    function appendTelemetryLog(dev) {
+      const now = new Date();
+      const timeStr = now.toTimeString().split(' ')[0];
+      state.telemetryLogs.unshift({
+        time: timeStr,
+        name: dev.name,
+        platform: dev.os === 'ios' ? 'Safari iOS' : 'Android Chrome',
+        coords: `${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}`,
+        accuracy: `±${dev.accuracy}m`,
+        priority: 'WakeLock + Audio'
+      });
+      if (state.telemetryLogs.length > 40) {
+        state.telemetryLogs.pop();
+      }
+      const tbody = document.getElementById('telemetryLogBody');
+      if (!tbody) return;
+      tbody.innerHTML = state.telemetryLogs.map(row => `
+        <tr class="hover:bg-slate-900/60">
+          <td class="py-2 px-3 text-slate-400">${row.time}</td>
+          <td class="py-2 px-3 font-sans font-semibold text-white">${row.name}</td>
+          <td class="py-2 px-3 text-sky-400">${row.platform}</td>
+          <td class="py-2 px-3 text-emerald-400">${row.coords}</td>
+          <td class="py-2 px-3 text-slate-300">${row.accuracy}</td>
+          <td class="py-2 px-3 text-amber-300">${row.priority}</td>
+        </tr>
+      `).join('');
+    }
+
+    // =========================================================================
+    // 2. ANTI-THROTTLING / ALWAYS-ON ENGINE FOR SAFARI (iOS) & ANDROID CHROME
+    // =========================================================================
+
+    // Layer 1: Screen Wake Lock API (with automatic re-lock on visibilitychange)
+    async function requestScreenWakeLock() {
+      const statusEl = document.getElementById('statusWakeLock');
+      if ('wakeLock' in navigator) {
+        try {
+          state.wakeLockSentinel = await navigator.wakeLock.request('screen');
+          statusEl.textContent = 'נעול ופעיל (Native)';
+          statusEl.className = 'px-2 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-semibold';
+          state.wakeLockSentinel.addEventListener('release', () => {
+            if (state.clientTrackingActive) {
+              requestScreenWakeLock();
+            }
+          });
+          return true;
+        } catch (err) {
+          statusEl.textContent = 'פעיל (Fallback)';
+          return false;
+        }
+      } else {
+        statusEl.textContent = 'פעיל (Audio Lock)';
+        return false;
+      }
+    }
+
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && state.clientTrackingActive) {
+        requestScreenWakeLock();
+        if (state.audioCtx && state.audioCtx.state === 'suspended') {
+          state.audioCtx.resume();
+        }
+      }
+    });
+
+    // Layer 2: Silent Web Audio Oscillator + MediaSession Keep-Alive (Prevents iOS Safari & Android Background Freeze)
+    function startSilentAudioKeepAlive() {
+      const statusEl = document.getElementById('statusAudioKeepAlive');
+      try {
+        const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+        if (!AudioContextClass) return;
+        if (!state.audioCtx) {
+          state.audioCtx = new AudioContextClass();
+        }
+        if (state.audioCtx.state === 'suspended') {
+          state.audioCtx.resume();
+        }
+        const osc = state.audioCtx.createOscillator();
+        const gain = state.audioCtx.createGain();
+        // Ultra-quiet sub-audible gain so user hears nothing, but iOS/Android keeps the process high-priority
+        gain.gain.setValueAtTime(0.0001, state.audioCtx.currentTime);
+        osc.frequency.setValueAtTime(40, state.audioCtx.currentTime);
+        osc.connect(gain);
+        gain.connect(state.audioCtx.destination);
+        osc.start();
+        state.silentOsc = osc;
+
+        if ('mediaSession' in navigator) {
+          navigator.mediaSession.metadata = new MediaMetadata({
+            title: 'GeoPulse — שיתוף מיקום פעיל',
+            artist: 'עדיפות מערכת גבוהה (Keep-Alive)',
+            album: 'GeoPulse Live'
+          });
+        }
+        statusEl.textContent = 'פעיל (Unthrottled)';
+      } catch (e) {
+        statusEl.textContent = 'פעיל (Worker)';
+      }
+    }
+
+    // Layer 3: Inline Web Worker Heartbeat (Bypasses main-thread background tab timer throttling)
+    function startWorkerHeartbeat() {
+      if (state.worker) {
+        state.worker.terminate();
+      }
+      const workerCode = `
+        let interval = 2000;
+        let timer = null;
+        function start() {
+          if (timer) clearInterval(timer);
+          timer = setInterval(() => {
+            postMessage({ type: 'HEARTBEAT', ts: Date.now() });
+          }, interval);
+        }
+        onmessage = function(e) {
+          if (e.data && e.data.interval) {
+            interval = e.data.interval;
+            start();
+          }
+        };
+        start();
+      `;
+      try {
+        const blob = new Blob([workerCode], { type: 'application/javascript' });
+        state.worker = new Worker(URL.createObjectURL(blob));
+        state.worker.onmessage = () => {
+          onHeartbeatTick();
+        };
+      } catch (err) {
+        // Fallback if Blob Worker is restricted
+        setInterval(onHeartbeatTick, state.pingIntervalMs);
+      }
+    }
+
+    // Layer 4: Real High-Accuracy Geolocation Watch + Fallback Coordinates
+    function startClientTracking() {
+      const consentChecked = document.getElementById('clientConsentCheckbox').checked;
+      if (!consentChecked) {
+        showToast('יש לסמן את תיבת ההסכמה לפני הפעלת שיתוף המיקום', 'warning');
+        return;
+      }
+
+      const userName = (document.getElementById('clientNameInput').value || 'משתמש מחובר').trim();
+      const userOs = document.getElementById('clientOsSelect').value;
+
+      state.clientTrackingActive = true;
+      state.clientPingCount = 1;
+
+      // Switch UI inside Client View
+      document.getElementById('clientConsentStep').classList.add('hidden');
+      document.getElementById('clientActiveStep').classList.remove('hidden');
+      document.getElementById('myDeviceActiveBadge').classList.remove('hidden');
+
+      // Activate Anti-Throttling Locks (Triggered inside direct click gesture!)
+      requestScreenWakeLock();
+      startSilentAudioKeepAlive();
+
+      const nowStr = new Date().toTimeString().slice(0, 5);
+      let selfDevice = state.devices.find(d => d.id === 'dev-self');
+      if (!selfDevice) {
+        selfDevice = {
+          id: 'dev-self',
+          name: userName,
+          os: userOs,
+          browser: userOs === 'ios' ? 'Safari Mobile (High-Priority)' : 'Chrome Android (High-Priority)',
+          address: (customClientCoords && customClientCoords.displayName) ? customClientCoords.displayName : 'יהוד-מונוסון (איכון OpenStreetMap)',
+          lat: customClientCoords ? customClientCoords.lat : 32.0332,
+          lng: customClientCoords ? customClientCoords.lng : 34.8895,
+          accuracy: 4,
+          speed: 5,
+          battery: 96,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: nowStr,
+          lastPing: Date.now(),
+          color: '#fbbf24',
+          isSelf: true,
+          heading: 0.00015,
+          trail: [[32.0332, 34.8895]]
+        };
+        state.devices.unshift(selfDevice);
+      } else {
+        selfDevice.name = userName;
+        selfDevice.os = userOs;
+      }
+
+      state.selectedDeviceId = 'dev-self';
+
+      // Battery API read if supported
+      if ('getBattery' in navigator) {
+        navigator.getBattery().then(bat => {
+          selfDevice.battery = Math.round(bat.level * 100);
+          renderDeviceList();
+        }).catch(() => {});
+      }
+
+      // Request real browser Geolocation with enableHighAccuracy
+      if ('geolocation' in navigator) {
+        state.geoWatchId = navigator.geolocation.watchPosition(
+          (pos) => {
+            selfDevice.lat = pos.coords.latitude;
+            selfDevice.lng = pos.coords.longitude;
+            selfDevice.accuracy = Math.max(3, Math.round(pos.coords.accuracy || 5));
+            selfDevice.speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 6;
+            selfDevice.lastPing = Date.now();
+            selfDevice.trail.push([selfDevice.lat, selfDevice.lng]);
+            if (selfDevice.trail.length > 25) selfDevice.trail.shift();
+
+            document.getElementById('clientSourceModeText').textContent = 'מחובר ל-GPS אמיתי + פענוח רחוב OpenStreetMap (ללא API Key)';
+            reverseGeocodeOSM(selfDevice.lat, selfDevice.lng, selfDevice);
+            updateClientDashboardUI(selfDevice);
+            broadcastDeviceUpdate(selfDevice);
+            syncAllMapLayers();
+            renderDeviceList();
+          },
+          () => {
+            // If blocked by sandbox iframe permissions, use OpenStreetMap Nominatim location
+            document.getElementById('clientSourceModeText').textContent = 'משדר מיקום מבוסס OpenStreetMap Nominatim (ללא API Key) • הגנת KeepAlive פעילה';
+            reverseGeocodeOSM(selfDevice.lat, selfDevice.lng, selfDevice);
+            updateClientDashboardUI(selfDevice);
+          },
+          {
+            enableHighAccuracy: true,
+            maximumAge: 0,
+            timeout: 10000
+          }
+        );
+      }
+
+      updateClientDashboardUI(selfDevice);
+      appendTelemetryLog(selfDevice);
+      syncAllMapLayers();
+      renderDeviceList();
+      showToast('הסכמה אושרה! איכון רציף בעדיפות גבוהה הופעל בהצלחה');
+    }
+
+    function stopClientTracking() {
+      state.clientTrackingActive = false;
+      if (state.geoWatchId !== null && 'geolocation' in navigator) {
+        navigator.geolocation.clearWatch(state.geoWatchId);
+        state.geoWatchId = null;
+      }
+      if (state.wakeLockSentinel) {
+        state.wakeLockSentinel.release().catch(() => {});
+        state.wakeLockSentinel = null;
+      }
+      if (state.silentOsc) {
+        try { state.silentOsc.stop(); } catch (e) {}
+        state.silentOsc = null;
+      }
+
+      // Remove self device from live list
+      const idx = state.devices.findIndex(d => d.id === 'dev-self');
+      if (idx !== -1) {
+        if (markersMap['dev-self'] && map) {
+          map.removeLayer(markersMap['dev-self']);
+          delete markersMap['dev-self'];
+        }
+        if (accuracyCirclesMap['dev-self'] && map) {
+          map.removeLayer(accuracyCirclesMap['dev-self']);
+          delete accuracyCirclesMap['dev-self'];
+        }
+        if (trailsMap['dev-self'] && map) {
+          map.removeLayer(trailsMap['dev-self']);
+          delete trailsMap['dev-self'];
+        }
+        state.devices.splice(idx, 1);
+      }
+
+      document.getElementById('clientActiveStep').classList.add('hidden');
+      document.getElementById('clientConsentStep').classList.remove('hidden');
+      document.getElementById('myDeviceActiveBadge').classList.add('hidden');
+      state.selectedDeviceId = state.devices[0] ? state.devices[0].id : null;
+      renderDeviceList();
+      showToast('שיתוף המיקום הופסק לבקשתך', 'warning');
+    }
+
+    function updateClientDashboardUI(dev) {
+      document.getElementById('clientLiveCoords').textContent = `${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}`;
+      document.getElementById('clientLiveAccuracy').textContent = `±${dev.accuracy} מטר`;
+      document.getElementById('clientPingCounter').textContent = String(state.clientPingCount);
+      document.getElementById('clientLastUpdate').textContent = 'כעת (חי)';
+      document.getElementById('oledCoords').textContent = `${dev.lat.toFixed(5)}, ${dev.lng.toFixed(5)}`;
+      document.getElementById('oledLastPing').textContent = `חבילה #${state.clientPingCount} שודרה בהצלחה`;
+    }
+
+    // Cross-tab real-time sync via BroadcastChannel
+    function initBroadcastChannel() {
+      if ('BroadcastChannel' in window) {
+        try {
+          state.broadcastChannel = new BroadcastChannel('geopulse_live_channel');
+          state.broadcastChannel.onmessage = (ev) => {
+            if (ev.data && ev.data.type === 'DEVICE_PING' && ev.data.device) {
+              const incoming = ev.data.device;
+              const existingIdx = state.devices.findIndex(d => d.id === incoming.id);
+              if (existingIdx >= 0) {
+                state.devices[existingIdx] = incoming;
+              } else {
+                state.devices.unshift(incoming);
+              }
+              syncAllMapLayers();
+              renderDeviceList();
+            }
+          };
+        } catch (e) {}
+      }
+    }
+
+    function broadcastDeviceUpdate(dev) {
+      if (state.broadcastChannel) {
+        try {
+          state.broadcastChannel.postMessage({ type: 'DEVICE_PING', device: dev });
+        } catch (e) {}
+      }
+      if (mqttClient && mqttClient.connected) {
+        try {
+          const topic = `geopulse/live/${roomId}/telemetry`;
+          mqttClient.publish(topic, JSON.stringify({
+            senderId: mqttClient.options.clientId,
+            device: dev
+          }));
+        } catch (e) {}
+      }
+    }
+
+    // Periodic Heartbeat Tick (Runs via Web Worker to never get throttled)
+    function onHeartbeatTick() {
+      const now = Date.now();
+
+      // Update simulated devices if enabled
+      if (state.simMovement) {
+        state.devices.forEach((dev) => {
+          if (dev.isSelf) return;
+          const deltaLat = dev.heading + (Math.random() - 0.5) * 0.00012;
+          const deltaLng = (dev.heading * 0.8) + (Math.random() - 0.5) * 0.00012;
+          dev.lat = Number((dev.lat + deltaLat).toFixed(6));
+          dev.lng = Number((dev.lng + deltaLng).toFixed(6));
+          dev.lastPing = now;
+          dev.trail.push([dev.lat, dev.lng]);
+          if (dev.trail.length > 20) dev.trail.shift();
+        });
+      }
+
+      // If client tracking is active, send continuous heartbeat packet
+      if (state.clientTrackingActive) {
+        const selfDev = state.devices.find(d => d.id === 'dev-self');
+        if (selfDev) {
+          state.clientPingCount += 1;
+          selfDev.lastPing = now;
+          updateClientDashboardUI(selfDev);
+          broadcastDeviceUpdate(selfDev);
+          appendTelemetryLog(selfDev);
+        }
+      } else if (state.devices.length > 0) {
+        const randomDev = state.devices[Math.floor(Math.random() * state.devices.length)];
+        appendTelemetryLog(randomDev);
+      }
+
+      syncAllMapLayers();
+      renderDeviceList();
+    }
+
+    // View Switching
+    function switchTab(tabName) {
+      state.activeTab = tabName;
+      const views = {
+        admin: document.getElementById('viewAdmin'),
+        client: document.getElementById('viewClient'),
+        tech: document.getElementById('viewTech')
+      };
+      const buttons = {
+        admin: document.getElementById('tabAdminBtn'),
+        client: document.getElementById('tabClientBtn'),
+        tech: document.getElementById('tabTechBtn')
+      };
+
+      Object.keys(views).forEach((k) => {
+        if (k === tabName) {
+          views[k].classList.remove('hidden');
+          if (k === 'client') views[k].classList.add('flex');
+          buttons[k].className = 'px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 bg-indigo-600 text-white shadow';
+        } else {
+          views[k].classList.add('hidden');
+          views[k].classList.remove('flex');
+          buttons[k].className = 'px-3.5 py-1.5 rounded-lg text-xs sm:text-sm font-bold transition flex items-center gap-1.5 text-slate-400 hover:text-white';
+        }
+      });
+
+      if (tabName === 'admin' && map) {
+        setTimeout(() => {
+          map.invalidateSize();
+          syncAllMapLayers();
+        }, 80);
+      }
+    }
+
+    // Room ID & Cloud MQTT Relay for real cross-device tracking
+    const urlParams = new URLSearchParams((window.location.hash.split('?')[1]) || '');
+    const roomId = urlParams.get('room') || 'GP-8842';
+    let mqttClient = null;
+
+    function initCloudMqttRelay() {
+      const badge = document.getElementById('cloudSyncStatusBadge');
+      const roomBadge = document.getElementById('roomCodeBadge');
+      if (roomBadge) roomBadge.textContent = roomId;
+      if (typeof mqtt === 'undefined') return;
+      try {
+        mqttClient = mqtt.connect('wss://broker.emqx.io:8084/mqtt', {
+          clientId: 'geopulse_' + Math.random().toString(16).slice(2, 10),
+          clean: true,
+          connectTimeout: 5000,
+          reconnectPeriod: 4000
+        });
+        const topic = `geopulse/live/${roomId}/telemetry`;
+        mqttClient.on('connect', () => {
+          if (badge) {
+            badge.textContent = '☁️ סנכרון ענן חי פעיל (WSS)';
+            badge.className = 'px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 text-emerald-300 font-semibold';
+          }
+          mqttClient.subscribe(topic);
+        });
+        mqttClient.on('message', (t, payload) => {
+          try {
+            const data = JSON.parse(payload.toString());
+            if (data && data.device && data.senderId !== mqttClient.options.clientId) {
+              const incoming = data.device;
+              incoming.isSelf = false;
+              const idx = state.devices.findIndex(d => d.id === incoming.id);
+              if (idx >= 0) {
+                state.devices[idx] = incoming;
+              } else {
+                state.devices.unshift(incoming);
+              }
+              syncAllMapLayers();
+              renderDeviceList();
+            }
+          } catch (e) {}
+        });
+      } catch (e) {}
+    }
+
+    // Generate Share URLs (Both User Agent Link & Admin Dashboard Link)
+    function updateShareUrl() {
+      let base = window.location.href.split('#')[0];
+      if (base.startsWith('about:') || base.startsWith('blob:') || base.includes('null')) {
+        base = 'https://your-domain.com/live_device_tracker.html';
+      }
+      const agentLink = `${base}#/consent?room=${roomId}&mode=agent`;
+      const adminLink = `${base}#/admin?room=${roomId}`;
+      document.getElementById('shareUrlInput').value = agentLink;
+      const modalAdmin = document.getElementById('modalAdminUrlInput');
+      if (modalAdmin) modalAdmin.value = adminLink;
+      const quickAgent = document.getElementById('quickAgentUrlInput');
+      if (quickAgent) quickAgent.value = agentLink;
+      const quickAdmin = document.getElementById('quickAdminUrlInput');
+      if (quickAdmin) quickAdmin.value = adminLink;
+    }
+
+    function copyInputValue(inputId, successMsg) {
+      const input = document.getElementById(inputId);
+      if (!input) return;
+      const text = input.value;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast(successMsg);
+        }).catch(() => fallbackCopy(input));
+      } else {
+        fallbackCopy(input);
+      }
+    }
+
+    function setAgentLockedMode(locked) {
+      const header = document.querySelector('header');
+      const topBanner = document.getElementById('topLinksBanner');
+      const exitBtn = document.getElementById('exitAgentLockBtn');
+      if (locked) {
+        switchTab('client');
+        if (header) header.classList.add('hidden');
+        if (topBanner) topBanner.classList.add('hidden');
+        if (exitBtn) exitBtn.classList.remove('hidden');
+      } else {
+        if (header) header.classList.remove('hidden');
+        if (topBanner) topBanner.classList.remove('hidden');
+        if (exitBtn) exitBtn.classList.add('hidden');
+        switchTab('admin');
+      }
+    }
+
+    // Copy to clipboard with fallback
+    function copyShareLink() {
+      const input = document.getElementById('shareUrlInput');
+      const text = input.value;
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(text).then(() => {
+          showToast('הקישור הועתק ללוח! שלח אותו למשתמשי Safari או Android');
+        }).catch(() => fallbackCopy(input));
+      } else {
+        fallbackCopy(input);
+      }
+    }
+
+    function fallbackCopy(inputEl) {
+      inputEl.select();
+      try {
+        document.execCommand('copy');
+        showToast('הקישור הועתק ללוח! שלח אותו למשתמשי Safari או Android');
+      } catch (e) {
+        showToast('העתק את הקישור מהתיבה', 'info');
+      }
+    }
+
+    // Export Telemetry Logs as CSV
+    function exportLogsCsv() {
+      if (state.telemetryLogs.length === 0) {
+        showToast('אין רשומות ביומן עדיין', 'warning');
+        return;
+      }
+      const headers = ['Time', 'DeviceName', 'Platform', 'Coordinates', 'Accuracy', 'PriorityMode'];
+      const rows = state.telemetryLogs.map(r => [
+        r.time,
+        `"${r.name.replace(/"/g, '""')}"`,
+        r.platform,
+        `"${r.coords}"`,
+        r.accuracy,
+        r.priority
+      ].join(','));
+      const csv = '\uFEFF' + [headers.join(','), ...rows].join('\n');
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'geopulse_locations_log.csv';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      showToast('קובץ CSV של היסטוריית המיקומים הורד בהצלחה');
+    }
+
+    // Attach all Event Listeners on DOM Ready
+    window.addEventListener('DOMContentLoaded', () => {
+      detectUserPlatform();
+      updateShareUrl();
+      initMap();
+      renderDeviceList();
+      initBroadcastChannel();
+      startWorkerHeartbeat();
+
+      // Seed initial telemetry rows
+      state.devices.forEach(d => appendTelemetryLog(d));
+
+      // Navigation Tabs
+      document.getElementById('tabAdminBtn').addEventListener('click', () => switchTab('admin'));
+      document.getElementById('tabClientBtn').addEventListener('click', () => switchTab('client'));
+      document.getElementById('tabTechBtn').addEventListener('click', () => switchTab('tech'));
+
+      // Share Modal
+      const shareModal = document.getElementById('shareModal');
+      document.getElementById('openShareModalBtn').addEventListener('click', () => {
+        updateShareUrl();
+        shareModal.classList.remove('hidden');
+        shareModal.classList.add('flex');
+      });
+      document.getElementById('closeShareModalBtn').addEventListener('click', () => {
+        shareModal.classList.add('hidden');
+        shareModal.classList.remove('flex');
+      });
+      document.getElementById('copyShareUrlBtn').addEventListener('click', copyShareLink);
+      document.getElementById('jumpToClientViewBtn').addEventListener('click', () => {
+        shareModal.classList.add('hidden');
+        shareModal.classList.remove('flex');
+        switchTab('client');
+      });
+
+      // Map Controls
+      document.getElementById('fitAllMarkersBtn').addEventListener('click', () => {
+        if (!map || state.devices.length === 0) return;
+        const bounds = L.latLngBounds(state.devices.map(d => [d.lat, d.lng]));
+        map.fitBounds(bounds.pad(0.25));
+      });
+
+      // OpenStreetMap Layer Switcher (Standard OSM Street Map vs Dark OSM)
+      document.getElementById('toggleMapThemeBtn').addEventListener('click', (e) => {
+        if (!map) return;
+        usingStandardOsm = !usingStandardOsm;
+        if (usingStandardOsm) {
+          map.removeLayer(osmDarkLayer);
+          osmStandardLayer.addTo(map);
+          e.currentTarget.textContent = 'מפה: רחובות OSM (ללא API Key)';
+        } else {
+          map.removeLayer(osmStandardLayer);
+          osmDarkLayer.addTo(map);
+          e.currentTarget.textContent = 'מפה: OSM כהה (ללא API Key)';
+        }
+      });
+
+      // Admin Map OpenStreetMap Nominatim Search (No API Key)
+      const handleAdminOsmSearch = async () => {
+        const q = document.getElementById('osmSearchInput').value;
+        if (!q || !q.trim()) {
+          showToast('הזן שם רחוב או עיר לחיפוש ב-OpenStreetMap', 'warning');
+          return;
+        }
+        showToast('מחפש מיקום ב-OpenStreetMap Nominatim (ללא API Key)...', 'info');
+        const found = await searchAddressOSM(q);
+        if (found && map) {
+          map.flyTo([found.lat, found.lng], 16, { duration: 0.8 });
+          showToast(`נמצא ב-OSM: ${found.displayName}`);
+        } else {
+          showToast('לא נמצאה כתובת תואמת ב-OpenStreetMap', 'warning');
+        }
+      };
+      document.getElementById('osmSearchBtn').addEventListener('click', handleAdminOsmSearch);
+      document.getElementById('osmSearchInput').addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') handleAdminOsmSearch();
+      });
+
+      // Client Agent OpenStreetMap Nominatim Address Locator (No API Key)
+      document.getElementById('clientOsmLocateBtn').addEventListener('click', async () => {
+        const q = document.getElementById('clientOsmAddressInput').value;
+        const previewEl = document.getElementById('clientOsmPreviewStatus');
+        if (!q || !q.trim()) {
+          showToast('הזן רחוב ועיר לאיכון דרך OpenStreetMap', 'warning');
+          return;
+        }
+        previewEl.classList.remove('hidden');
+        previewEl.textContent = 'מבצע איכון מול שרתי OpenStreetMap Nominatim...';
+        const found = await searchAddressOSM(q);
+        if (found) {
+          customClientCoords = found;
+          previewEl.textContent = `✓ אומת ב-OpenStreetMap: ${found.displayName} (${found.lat.toFixed(5)}, ${found.lng.toFixed(5)})`;
+          showToast('הכתובת אומתה ב-OpenStreetMap! לחץ על כפתור ההסכמה לשידור');
+        } else {
+          previewEl.textContent = 'לא נמצאה התאמה — המערכת תשתמש ב-GPS המכשיר';
+        }
+      });
+
+      document.getElementById('toggleTrailsBtn').addEventListener('click', (e) => {
+        state.showTrails = !state.showTrails;
+        e.currentTarget.textContent = `מסלולי תנועה: ${state.showTrails ? 'פעיל' : 'מוסתר'}`;
+        syncAllMapLayers();
+      });
+
+      document.getElementById('toggleFollowBtn').addEventListener('click', (e) => {
+        state.autoFollow = !state.autoFollow;
+        e.currentTarget.textContent = `מעקב אוטומטי: ${state.autoFollow ? 'פעיל' : 'כבוי'}`;
+        if (state.autoFollow) {
+          showToast('מעקב מפה אוטומטי אחר המכשיר הנבחר הופעל');
+        }
+      });
+
+      // Filter & Search
+      document.getElementById('deviceSearchInput').addEventListener('input', renderDeviceList);
+      document.getElementById('osFilterSelect').addEventListener('change', renderDeviceList);
+
+      // Simulation & Self-Connect Controls
+      document.getElementById('toggleSimMovement').addEventListener('change', (e) => {
+        state.simMovement = e.target.checked;
+      });
+
+      document.getElementById('addDemoDeviceBtn').addEventListener('click', () => {
+        const idx = state.devices.length + 1;
+        const isIos = idx % 2 === 0;
+        const baseLat = 32.04 + (Math.random() - 0.5) * 0.08;
+        const baseLng = 34.84 + (Math.random() - 0.5) * 0.08;
+        const colors = ['#a78bfa', '#2dd4bf', '#fb7185', '#60a5fa'];
+        const newDev = {
+          id: 'dev-' + Date.now(),
+          name: `מכשיר שטח #${idx} (${isIos ? 'iPhone' : 'Galaxy'})`,
+          os: isIos ? 'ios' : 'android',
+          browser: isIos ? 'Safari 17.5 (iOS)' : 'Chrome 125 (Android)',
+          lat: Number(baseLat.toFixed(5)),
+          lng: Number(baseLng.toFixed(5)),
+          accuracy: 5,
+          speed: 20,
+          battery: 82,
+          keepAlive: true,
+          wakeLock: true,
+          consentTime: new Date().toTimeString().slice(0, 5),
+          lastPing: Date.now(),
+          color: colors[idx % colors.length],
+          isSelf: false,
+          heading: 0.0002,
+          trail: [[baseLat, baseLng]]
+        };
+        state.devices.push(newDev);
+        syncAllMapLayers();
+        renderDeviceList();
+        selectDevice(newDev.id, true);
+        showToast(`נוסף ${newDev.name} למפה`);
+      });
+
+      document.getElementById('quickConnectMyGpsBtn').addEventListener('click', () => {
+        switchTab('client');
+      });
+
+      // Client Consent & Active Tracking Controls
+      document.getElementById('startClientTrackingBtn').addEventListener('click', startClientTracking);
+      document.getElementById('stopClientTrackingBtn').addEventListener('click', stopClientTracking);
+      document.getElementById('viewOnAdminMapBtn').addEventListener('click', () => {
+        switchTab('admin');
+        selectDevice('dev-self', true);
+      });
+
+      document.getElementById('nudgeMyLocationBtn').addEventListener('click', () => {
+        const selfDev = state.devices.find(d => d.id === 'dev-self');
+        if (!selfDev) return;
+        selfDev.lat = Number((selfDev.lat + 0.0008).toFixed(6));
+        selfDev.lng = Number((selfDev.lng + 0.0006).toFixed(6));
+        selfDev.lastPing = Date.now();
+        selfDev.trail.push([selfDev.lat, selfDev.lng]);
+        state.clientPingCount += 1;
+        updateClientDashboardUI(selfDev);
+        broadcastDeviceUpdate(selfDev);
+        syncAllMapLayers();
+        renderDeviceList();
+        showToast('בוצעה תזוזת מיקום! המיקום החדש עודכן במפת המנהל');
+      });
+
+      // OLED Smart Blackout Mode (Prevents iOS/Android sleep while saving battery)
+      const oledOverlay = document.getElementById('oledOverlay');
+      document.getElementById('enableOledModeBtn').addEventListener('click', () => {
+        oledOverlay.classList.remove('hidden');
+        oledOverlay.classList.add('flex');
+        requestScreenWakeLock();
+      });
+
+      let lastTap = 0;
+      oledOverlay.addEventListener('click', () => {
+        const now = Date.now();
+        if (now - lastTap < 400) {
+          oledOverlay.classList.add('hidden');
+          oledOverlay.classList.remove('flex');
+        }
+        lastTap = now;
+      });
+      oledOverlay.addEventListener('dblclick', () => {
+        oledOverlay.classList.add('hidden');
+        oledOverlay.classList.remove('flex');
+      });
+
+      // Tech View Settings
+      document.getElementById('pingIntervalSelect').addEventListener('change', (e) => {
+        state.pingIntervalMs = Number(e.target.value);
+        if (state.worker) {
+          state.worker.postMessage({ interval: state.pingIntervalMs });
+        }
+        document.getElementById('statusWorkerHeartbeat').textContent = `פעיל (${state.pingIntervalMs / 1000}s)`;
+        showToast(`קצב שידור המיקום עודכן לכל ${state.pingIntervalMs / 1000} שניות`);
+      });
+
+      document.getElementById('exportLogsCsvBtn').addEventListener('click', exportLogsCsv);
+      document.getElementById('clearLogsBtn').addEventListener('click', () => {
+        state.telemetryLogs = [];
+        document.getElementById('telemetryLogBody').innerHTML = '';
+        showToast('יומן השידורים נוקה', 'info');
+      });
+
+      initCloudMqttRelay();
+
+      // Quick links bar & modal buttons
+      document.getElementById('copyQuickAgentBtn').addEventListener('click', () => {
+        copyInputValue('quickAgentUrlInput', 'קישור ה-Agent למשתמשים הועתק ללוח!');
+      });
+      document.getElementById('copyQuickAdminBtn').addEventListener('click', () => {
+        copyInputValue('quickAdminUrlInput', 'קישור דאשבורד המנהל הועתק ללוח!');
+      });
+      document.getElementById('copyModalAdminUrlBtn').addEventListener('click', () => {
+        copyInputValue('modalAdminUrlInput', 'קישור דאשבורד המנהל הועתק ללוח!');
+      });
+      document.getElementById('previewLockedAgentBtn').addEventListener('click', () => {
+        setAgentLockedMode(true);
+        showToast('מציג את מסך ה-Agent כפי שמשתמש הקצה רואה אותו');
+      });
+      document.getElementById('exitAgentLockBtn').addEventListener('click', () => {
+        setAgentLockedMode(false);
+      });
+
+      // Check URL hash if opened via #/consent link
+      if (window.location.hash.includes('consent')) {
+        if (window.location.hash.includes('mode=agent')) {
+          setAgentLockedMode(true);
+        } else {
+          switchTab('client');
+        }
+      }
+    });
+  </script>
+</body>
+</html>
