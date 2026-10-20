@@ -297,9 +297,14 @@
             <span>מכשירים משדרים בזמן אמת</span>
             <span id="livePingIndicator" class="inline-block w-2 h-2 rounded-full bg-emerald-400 animate-ping"></span>
           </h2>
-          <button id="fitAllMarkersBtn" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 transition">
-            מרכז את כולם במפה
-          </button>
+          <div class="flex items-center gap-1.5">
+            <button id="deleteAllDemoBtn" class="text-xs text-rose-400 hover:text-rose-300 font-semibold px-2 py-1 rounded-lg bg-rose-500/10 border border-rose-500/25 transition" title="הסר את כל 4 מכשירי ההדגמה מהמפה">
+              🗑️ מחק דמו
+            </button>
+            <button id="fitAllMarkersBtn" class="text-xs text-indigo-400 hover:text-indigo-300 font-medium px-2 py-1 rounded-lg bg-indigo-500/10 border border-indigo-500/20 transition">
+              מרכז את כולם במפה
+            </button>
+          </div>
         </div>
 
         <!-- Search & Platform Filter -->
@@ -663,6 +668,7 @@
       devices: [
         {
           id: 'dev-1',
+          isDemo: true,
           name: 'עומר כהן — נייד שטח',
           os: 'ios',
           browser: 'Safari 17.4 (iOS)',
@@ -687,6 +693,7 @@
         },
         {
           id: 'dev-2',
+          isDemo: true,
           name: 'נועה לוי — שליחויות מרכז',
           os: 'android',
           browser: 'Chrome 124 (Android)',
@@ -711,6 +718,7 @@
         },
         {
           id: 'dev-3',
+          isDemo: true,
           name: 'דניאל מזרחי — סיור צפון ת"א',
           os: 'ios',
           browser: 'Safari 17.5 (iOS)',
@@ -735,6 +743,7 @@
         },
         {
           id: 'dev-4',
+          isDemo: true,
           name: 'מאיה אברהם — צוות תגובה',
           os: 'android',
           browser: 'Chrome 125 (Android)',
@@ -991,6 +1000,15 @@
       document.getElementById('statAvgAccuracy').textContent = `±${avgAcc}m`;
 
       container.innerHTML = '';
+      if (filtered.length === 0) {
+        container.innerHTML = `
+          <div class="text-center py-8 px-4 rounded-xl bg-slate-950/60 border border-slate-800/80 text-xs text-slate-400 space-y-1.5">
+            <div class="text-base">📡</div>
+            <div class="font-bold text-slate-300">אין מכשירים מוצגים כעת</div>
+            <div>שלח את קישור ה-Agent למשתמשים או לחץ למטה על "+ הוסף מכשיר סימולציה"</div>
+          </div>
+        `;
+      }
       filtered.forEach((dev) => {
         const isSelected = dev.id === state.selectedDeviceId;
         const secondsAgo = Math.max(0, Math.round((Date.now() - dev.lastPing) / 1000));
@@ -1016,21 +1034,110 @@
                 <div class="text-[11px] text-emerald-400 font-medium mt-0.5">📍 ${dev.address || 'פענוח כתובת OSM...'}</div>
               </div>
             </div>
-            <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-400 border border-emerald-500/30">
-              WakeLock פעיל
-            </span>
+            <div class="flex items-center gap-1.5">
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-semibold ${dev.isDemo ? 'bg-slate-800 text-slate-400 border border-slate-700' : 'bg-emerald-500/15 text-emerald-400 border border-emerald-500/30'}">
+                ${dev.isDemo ? 'דמו' : 'חי • WakeLock'}
+              </span>
+              <button type="button" data-delete-id="${dev.id}" class="delete-dev-btn p-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/25 text-rose-400 border border-rose-500/20 transition" title="מחק משתמש זה מהמפה">
+                🗑️
+              </button>
+            </div>
           </div>
           <div class="mt-2.5 pt-2 border-t border-slate-800/80 flex items-center justify-between text-[11px] text-slate-400 font-mono-num">
             <span>${dev.lat.toFixed(4)}, ${dev.lng.toFixed(4)}</span>
-            <span>±${dev.accuracy}m • ${dev.battery}% 🔋</span>
+            <span>${dev.speed || 0} km/h • ±${dev.accuracy}m • ${dev.battery}% 🔋</span>
             <span class="text-emerald-400">${secondsAgo === 0 ? 'כעת' : `לפני ${secondsAgo}ש'`}</span>
           </div>
         `;
-        card.addEventListener('click', () => selectDevice(dev.id, true));
+        card.addEventListener('click', (e) => {
+          if (e.target.closest('.delete-dev-btn')) return;
+          selectDevice(dev.id, true);
+        });
+        const delBtn = card.querySelector('.delete-dev-btn');
+        if (delBtn) {
+          delBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            deleteDevice(dev.id, true);
+          });
+        }
         container.appendChild(card);
       });
 
       updateSelectedDeviceBar();
+    }
+
+    // Calculate distance in meters between two lat/lng points (to filter out stationary GPS drift)
+    function calcDistanceMeters(lat1, lon1, lat2, lon2) {
+      const R = 6371000;
+      const toRad = (deg) => (deg * Math.PI) / 180;
+      const dLat = toRad(lat2 - lat1);
+      const dLon = toRad(lon2 - lon1);
+      const a =
+        Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+        Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+      return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+    }
+
+    // Remove a single device (demo or real) from the map & state
+    function deleteDevice(deviceId, notifyCloud = true) {
+      const idx = state.devices.findIndex(d => d.id === deviceId);
+      if (idx === -1) return;
+      const removed = state.devices[idx];
+
+      if (markersMap[deviceId] && map) {
+        map.removeLayer(markersMap[deviceId]);
+        delete markersMap[deviceId];
+      }
+      if (accuracyCirclesMap[deviceId] && map) {
+        map.removeLayer(accuracyCirclesMap[deviceId]);
+        delete accuracyCirclesMap[deviceId];
+      }
+      if (trailsMap[deviceId] && map) {
+        map.removeLayer(trailsMap[deviceId]);
+        delete trailsMap[deviceId];
+      }
+
+      state.devices.splice(idx, 1);
+
+      // Persist deleted demo IDs so they don't reappear on page reload
+      try {
+        const deletedIds = JSON.parse(localStorage.getItem('geopulse_deleted_ids') || '[]');
+        if (!deletedIds.includes(deviceId)) {
+          deletedIds.push(deviceId);
+          localStorage.setItem('geopulse_deleted_ids', JSON.stringify(deletedIds));
+        }
+      } catch (e) {}
+
+      if (state.selectedDeviceId === deviceId) {
+        state.selectedDeviceId = state.devices[0] ? state.devices[0].id : null;
+      }
+
+      if (notifyCloud && mqttClient && mqttClient.connected) {
+        try {
+          const topic = `geopulse/live/${roomId}/telemetry`;
+          mqttClient.publish(topic, JSON.stringify({
+            senderId: mqttClient.options.clientId,
+            type: 'DEVICE_DELETE',
+            deviceId: deviceId
+          }));
+        } catch (e) {}
+      }
+
+      renderDeviceList();
+      syncAllMapLayers();
+      showToast(`המכשיר "${removed.name}" הוסר מהמפה`, 'info');
+    }
+
+    // Remove all demo devices at once
+    function deleteAllDemoDevices() {
+      const demoIds = state.devices.filter(d => d.isDemo).map(d => d.id);
+      if (demoIds.length === 0) {
+        showToast('אין מכשירי דמו ברשימה כעת', 'info');
+        return;
+      }
+      demoIds.forEach(id => deleteDevice(id, false));
+      showToast('כל מכשירי הדמו נמחקו! המפה מציגה כעת רק מכשירים אמיתיים');
     }
 
     function selectDevice(deviceId, panToMarker = true) {
@@ -1048,7 +1155,17 @@
 
     function updateSelectedDeviceBar() {
       const dev = state.devices.find(d => d.id === state.selectedDeviceId) || state.devices[0];
-      if (!dev) return;
+      if (!dev) {
+        document.getElementById('selDeviceName').textContent = 'אין מכשירים מחוברים כרגע';
+        document.getElementById('selDeviceOsTag').textContent = 'ממתין לחיבור';
+        document.getElementById('selDeviceMeta').textContent = 'שלח קישור Agent למשתמש כדי לראות את מיקומו החי';
+        const addrEl = document.getElementById('selDeviceAddress');
+        if (addrEl) addrEl.textContent = '📍 כתובת: —';
+        document.getElementById('selDeviceCoords').textContent = '—, —';
+        document.getElementById('selDeviceSpeed').textContent = '0 km/h';
+        document.getElementById('selDeviceBattery').textContent = '—';
+        return;
+      }
       document.getElementById('selDeviceBadge').textContent = dev.isSelf ? '📍' : (dev.os === 'ios' ? '' : '🤖');
       document.getElementById('selDeviceName').textContent = dev.name;
       document.getElementById('selDeviceOsTag').textContent = dev.browser;
@@ -1219,18 +1336,28 @@
       startSilentAudioKeepAlive();
 
       const nowStr = new Date().toTimeString().slice(0, 5);
-      let selfDevice = state.devices.find(d => d.id === 'dev-self');
+      const defaultSelfSpec = { id: 'dev-self' }; let myDevId = defaultSelfSpec.id;
+      try {
+        myDevId = localStorage.getItem('geopulse_my_device_id') || ('dev-live-' + Math.random().toString(36).slice(2, 7));
+        localStorage.setItem('geopulse_my_device_id', myDevId);
+      } catch (e) {}
+      state.myDeviceId = myDevId;
+
+      const startLat = customClientCoords ? customClientCoords.lat : 32.0853;
+      const startLng = customClientCoords ? customClientCoords.lng : 34.8878;
+
+      let selfDevice = state.devices.find(d => d.id === myDevId);
       if (!selfDevice) {
         selfDevice = {
-          id: 'dev-self',
+          id: myDevId,
           name: userName,
           os: userOs,
           browser: userOs === 'ios' ? 'Safari Mobile (High-Priority)' : 'Chrome Android (High-Priority)',
-          address: (customClientCoords && customClientCoords.displayName) ? customClientCoords.displayName : 'יהוד-מונוסון (איכון OpenStreetMap)',
-          lat: customClientCoords ? customClientCoords.lat : 32.0332,
-          lng: customClientCoords ? customClientCoords.lng : 34.8895,
-          accuracy: 4,
-          speed: 5,
+          address: (customClientCoords && customClientCoords.displayName) ? customClientCoords.displayName : 'מאתר כתובת מדויקת ב-OpenStreetMap...',
+          lat: startLat,
+          lng: startLng,
+          accuracy: 5,
+          speed: 0,
           battery: 96,
           keepAlive: true,
           wakeLock: true,
@@ -1238,16 +1365,20 @@
           lastPing: Date.now(),
           color: '#fbbf24',
           isSelf: true,
-          heading: 0.00015,
-          trail: [[32.0332, 34.8895]]
+          isDemo: false,
+          hasInitialFix: Boolean(customClientCoords),
+          heading: 0,
+          trail: [[startLat, startLng]]
         };
         state.devices.unshift(selfDevice);
       } else {
         selfDevice.name = userName;
         selfDevice.os = userOs;
+        selfDevice.isDemo = false;
+        selfDevice.heading = 0;
       }
 
-      state.selectedDeviceId = 'dev-self';
+      state.selectedDeviceId = myDevId;
 
       // Battery API read if supported
       if ('getBattery' in navigator) {
@@ -1257,17 +1388,38 @@
         }).catch(() => {});
       }
 
-      // Request real browser Geolocation with enableHighAccuracy
+      // Request real browser Geolocation with enableHighAccuracy & stationary anti-jitter filter
       if ('geolocation' in navigator) {
         state.geoWatchId = navigator.geolocation.watchPosition(
           (pos) => {
-            selfDevice.lat = pos.coords.latitude;
-            selfDevice.lng = pos.coords.longitude;
+            const newLat = pos.coords.latitude;
+            const newLng = pos.coords.longitude;
+            const distMoved = calcDistanceMeters(selfDevice.lat, selfDevice.lng, newLat, newLng);
+            const rawSpeedKmh = (pos.coords.speed && pos.coords.speed > 0.3) ? Math.round(pos.coords.speed * 3.6) : 0;
+
+            // Stationary filter: if first GPS fix OR moved >= 6 meters, update position; otherwise ignore indoor GPS drift
+            if (!selfDevice.hasInitialFix || distMoved >= 6) {
+              selfDevice.lat = Number(newLat.toFixed(6));
+              selfDevice.lng = Number(newLng.toFixed(6));
+              if (!selfDevice.hasInitialFix) {
+                selfDevice.trail = [[selfDevice.lat, selfDevice.lng]];
+                selfDevice.hasInitialFix = true;
+              } else {
+                selfDevice.trail.push([selfDevice.lat, selfDevice.lng]);
+                if (selfDevice.trail.length > 25) selfDevice.trail.shift();
+              }
+              selfDevice.speed = rawSpeedKmh;
+              reverseGeocodeOSM(selfDevice.lat, selfDevice.lng, selfDevice);
+            } else {
+              // Device is stationary in the same spot
+              selfDevice.speed = 0;
+            }
+
             selfDevice.accuracy = Math.max(3, Math.round(pos.coords.accuracy || 5));
-            selfDevice.speed = pos.coords.speed ? Math.round(pos.coords.speed * 3.6) : 6;
             selfDevice.lastPing = Date.now();
-            selfDevice.trail.push([selfDevice.lat, selfDevice.lng]);
-            if (selfDevice.trail.length > 25) selfDevice.trail.shift();
+
+            document.getElementById('clientSourceModeText').textContent = 'מחובר ל-GPS אמיתי (מסנן רעשי עמידה פעיל) + OpenStreetMap';
+            updateClientDashboardUI(selfDevice);
 
             document.getElementById('clientSourceModeText').textContent = 'מחובר ל-GPS אמיתי + פענוח רחוב OpenStreetMap (ללא API Key)';
             reverseGeocodeOSM(selfDevice.lat, selfDevice.lng, selfDevice);
@@ -1313,19 +1465,20 @@
       }
 
       // Remove self device from live list
-      const idx = state.devices.findIndex(d => d.id === 'dev-self');
+      const targetId = state.myDeviceId || 'dev-self';
+      const idx = state.devices.findIndex(d => d.id === targetId);
       if (idx !== -1) {
-        if (markersMap['dev-self'] && map) {
-          map.removeLayer(markersMap['dev-self']);
-          delete markersMap['dev-self'];
+        if (markersMap[targetId] && map) {
+          map.removeLayer(markersMap[targetId]);
+          delete markersMap[targetId];
         }
-        if (accuracyCirclesMap['dev-self'] && map) {
-          map.removeLayer(accuracyCirclesMap['dev-self']);
-          delete accuracyCirclesMap['dev-self'];
+        if (accuracyCirclesMap[targetId] && map) {
+          map.removeLayer(accuracyCirclesMap[targetId]);
+          delete accuracyCirclesMap[targetId];
         }
-        if (trailsMap['dev-self'] && map) {
-          map.removeLayer(trailsMap['dev-self']);
-          delete trailsMap['dev-self'];
+        if (trailsMap[targetId] && map) {
+          map.removeLayer(trailsMap[targetId]);
+          delete trailsMap[targetId];
         }
         state.devices.splice(idx, 1);
       }
@@ -1390,12 +1543,12 @@
     function onHeartbeatTick() {
       const now = Date.now();
 
-      // Update simulated devices if enabled
+      // Update ONLY demo devices if simulation is enabled (NEVER move real connected user devices!)
       if (state.simMovement) {
         state.devices.forEach((dev) => {
-          if (dev.isSelf) return;
-          const deltaLat = dev.heading + (Math.random() - 0.5) * 0.00012;
-          const deltaLng = (dev.heading * 0.8) + (Math.random() - 0.5) * 0.00012;
+          if (!dev.isDemo || dev.isSelf) return;
+          const deltaLat = (dev.heading || 0.00018) + (Math.random() - 0.5) * 0.00012;
+          const deltaLng = ((dev.heading || 0.00018) * 0.8) + (Math.random() - 0.5) * 0.00012;
           dev.lat = Number((dev.lat + deltaLat).toFixed(6));
           dev.lng = Number((dev.lng + deltaLng).toFixed(6));
           dev.lastPing = now;
@@ -1404,9 +1557,9 @@
         });
       }
 
-      // If client tracking is active, send continuous heartbeat packet
+      // If client tracking is active, send continuous heartbeat packet (without changing coordinates!)
       if (state.clientTrackingActive) {
-        const selfDev = state.devices.find(d => d.id === 'dev-self');
+        const selfDev = state.devices.find(d => d.id === (state.myDeviceId || 'dev-self'));
         if (selfDev) {
           state.clientPingCount += 1;
           selfDev.lastPing = now;
@@ -1485,9 +1638,16 @@
         mqttClient.on('message', (t, payload) => {
           try {
             const data = JSON.parse(payload.toString());
-            if (data && data.device && data.senderId !== mqttClient.options.clientId) {
+            if (!data || data.senderId === mqttClient.options.clientId) return;
+            if (data.type === 'DEVICE_DELETE' && data.deviceId) {
+              deleteDevice(data.deviceId, false);
+              return;
+            }
+            if (data.device) {
               const incoming = data.device;
               incoming.isSelf = false;
+              incoming.isDemo = false;
+              incoming.heading = 0;
               const idx = state.devices.findIndex(d => d.id === incoming.id);
               if (idx >= 0) {
                 state.devices[idx] = incoming;
@@ -1601,6 +1761,15 @@
 
     // Attach all Event Listeners on DOM Ready
     window.addEventListener('DOMContentLoaded', () => {
+      // Filter out any previously deleted demo devices stored in localStorage
+      try {
+        const deletedIds = JSON.parse(localStorage.getItem('geopulse_deleted_ids') || '[]');
+        if (Array.isArray(deletedIds) && deletedIds.length > 0) {
+          state.devices = state.devices.filter(d => !deletedIds.includes(d.id));
+          state.selectedDeviceId = state.devices[0] ? state.devices[0].id : null;
+        }
+      } catch (e) {}
+
       detectUserPlatform();
       updateShareUrl();
       initMap();
@@ -1634,7 +1803,9 @@
         switchTab('client');
       });
 
-      // Map Controls
+      // Map Controls & Delete Demo Devices
+      document.getElementById('deleteAllDemoBtn').addEventListener('click', deleteAllDemoDevices);
+
       document.getElementById('fitAllMarkersBtn').addEventListener('click', () => {
         if (!map || state.devices.length === 0) return;
         const bounds = L.latLngBounds(state.devices.map(d => [d.lat, d.lng]));
@@ -1742,6 +1913,8 @@
           lastPing: Date.now(),
           color: colors[idx % colors.length],
           isSelf: false,
+          isDemo: true,
+          address: 'אזור גוש דן (סימולציה)',
           heading: 0.0002,
           trail: [[baseLat, baseLng]]
         };
@@ -1761,11 +1934,11 @@
       document.getElementById('stopClientTrackingBtn').addEventListener('click', stopClientTracking);
       document.getElementById('viewOnAdminMapBtn').addEventListener('click', () => {
         switchTab('admin');
-        selectDevice('dev-self', true);
+        selectDevice(state.myDeviceId || 'dev-self', true);
       });
 
       document.getElementById('nudgeMyLocationBtn').addEventListener('click', () => {
-        const selfDev = state.devices.find(d => d.id === 'dev-self');
+        const selfDev = state.devices.find(d => d.id === (state.myDeviceId || 'dev-self'));
         if (!selfDev) return;
         selfDev.lat = Number((selfDev.lat + 0.0008).toFixed(6));
         selfDev.lng = Number((selfDev.lng + 0.0006).toFixed(6));
